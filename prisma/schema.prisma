@@ -1,0 +1,84 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Session {
+  id          String    @id
+  shop        String
+  state       String
+  isOnline    Boolean   @default(false)
+  scope       String?
+  expires     DateTime?
+  accessToken String
+  userId      BigInt?
+  firstName   String?
+  lastName    String?
+  email       String?
+  accountOwner Boolean  @default(false)
+  locale      String?
+  collaborator Boolean? @default(false)
+  emailVerified Boolean? @default(false)
+}
+
+model EbayCredential {
+  id        String   @id @default(uuid())
+  shop      String   @unique
+  appId     String
+  certId    String
+  devId     String
+  authToken String
+  sellerId  String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model SkuMapping {
+  id               String    @id @default(uuid())
+  shop             String
+  ebayItemId       String
+  shopifyProductId String
+  shopifyVariantId String
+  ebaysku          String?
+  shopifySku       String?
+  isActive         Boolean   @default(true)
+  lastSyncedAt     DateTime?
+  createdAt        DateTime  @default(now())
+
+  @@unique([shop, ebayItemId])
+  @@index([shop])
+}
+
+model SyncLog {
+  id          String      @id @default(uuid())
+  shop        String
+  jobId       String?
+  startedAt   DateTime    @default(now())
+  finishedAt  DateTime?
+  status      SyncStatus  @default(RUNNING)
+  itemsSynced Int         @default(0)
+  errors      SyncError[]
+
+  @@index([shop])
+}
+
+model SyncError {
+  id               String   @id @default(uuid())
+  syncLogId        String
+  syncLog          SyncLog  @relation(fields: [syncLogId], references: [id])
+  ebayItemId       String?
+  shopifyProductId String?
+  message          String
+  createdAt        DateTime @default(now())
+}
+
+enum SyncStatus {
+  RUNNING
+  SUCCESS
+  PARTIAL
+  FAILED
+}
