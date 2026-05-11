@@ -26,15 +26,23 @@ model Session {
 }
 
 model EbayCredential {
-  id        String   @id @default(uuid())
-  shop      String   @unique
-  appId     String
-  certId    String
-  devId     String
-  authToken String
-  sellerId  String
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id                 String    @id @default(uuid())
+  shop               String    @unique
+  appId              String
+  certId             String
+  devId              String
+  authToken          String    @default("")
+  sellerId           String
+  /// OAuth 2.0 access token (encrypted, auto-refreshed)
+  accessToken        String?
+  /// OAuth 2.0 refresh token (encrypted, long-lived)
+  refreshToken       String?
+  /// When the access token expires
+  accessTokenExpiry  DateTime?
+  /// The eBay redirect URI registered in developer portal (RuName)
+  redirectUri        String?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
 }
 
 model SkuMapping {

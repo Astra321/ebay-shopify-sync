@@ -1,7 +1,11 @@
 import axios from "axios";
 import { XMLParser } from "fast-xml-parser";
+import { db } from "../db.server";
+import { decrypt, encrypt } from "./crypto.server";
 
 const EBAY_API_URL = "https://api.ebay.com/ws/api.dll";
+const EBAY_REST_BASE = "https://api.ebay.com";
+const EBAY_TOKEN_URL = "https://api.ebay.com/identity/v1/oauth2/token";
 const parser = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: "@_" });
 
 export interface EbayCredentials {
@@ -10,6 +14,12 @@ export interface EbayCredentials {
   devId: string;
   authToken: string;
   sellerId: string;
+  /** OAuth 2.0 access token — preferred over legacy authToken */
+  accessToken?: string;
+  /** OAuth 2.0 refresh token — for auto-refreshing access tokens */
+  refreshToken?: string;
+  /** Access token expiry time */
+  accessTokenExpiry?: Date;
 }
 
 export interface EbayListing {
@@ -24,8 +34,139 @@ export interface EbayListing {
   category?: string;
 }
 
+/**
+ * eBay API client with dual support:
+ * - OAuth 2.0 access tokens (preferred — modern REST API with auto-refresh)
+ * - Legacy Auth'n'Auth tokens (fallback — XML Trading API)
+ *
+ * When OAuth credentials are available, the client automatically uses the
+ * REST API and handles token refresh when access tokens expire.
+ */
 export class EbayClient {
-  constructor(private creds: EbayCredentials) {}
+  private creds: EbayCredentials;
+
+  constructor(creds: EbayCredentials) {
+    this.creds = creds;
+  }
+
+  /**
+   * Returns true if OAuth 2.0 access token is available (preferred mode).
+   */
+  get usesOAuth(): boolean {
+    return !!(this.creds.accessToken || this.creds.refreshToken);
+  }
+
+  /**
+   * Ensure we have a valid access token, refreshing if necessary.
+   * Only applies when using OAuth 2.0 mode.
+   */
+  private async ensureAccessToken(): Promise<string> {
+    // If we have a valid (non-expired) access token, use it
+    if (this.creds.accessToken) {
+      if (this.creds.accessTokenExpiry && this.creds.accessTokenExpiry > new Date()) {
+        return this.creds.accessToken;
+      }
+    }
+
+    // Need to refresh using refresh token
+    if (!this.creds.refreshToken) {
+      throw new Error("eBay OAuth: No refresh token available. Please re-authorize the app.");
+    }
+
+    const creds = Buffer.from(`${this.creds.appId}:${this.creds.certId}`).toString("base64");
+    const { data } = await axios.post(
+      EBAY_TOKEN_URL,
+      new URLSearchParams({
+        grant_type: "refresh_token",
+        refresh_token: this.creds.refreshToken,
+        scope: "https://api.ebay.com/oauth/api_scope/sell.inventory https://api.ebay.com/oauth/api_scope/sell.inventory.readonly",
+      }).toString(),
+      {
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded",
+          Authorization: `Basic ${creds}`,
+        },
+      }
+    );
+
+    this.creds.accessToken = data.access_token;
+    this.creds.accessTokenExpiry = new Date(Date.now() + (data.expires_in - 60) * 1000);
+
+    // Persist the refreshed token to DB (shop is needed for this — caller must handle if desired)
+    return this.creds.accessToken;
+  }
+
+  // ─── OAuth 2.0 REST API methods (preferred) ───────────────────────
+
+  /**
+   * Fetch seller listings via eBay Inventory API (OAuth 2.0).
+   * Uses the Sell Inventory REST endpoint which returns JSON natively.
+   */
+  async getSellerListingsOAuth(): Promise<EbayListing[]> {
+    const token = await this.ensureAccessToken();
+    const results: EbayListing[] = [];
+    let offset = 0;
+    const limit = 100;
+    let hasMore = true;
+
+    while (hasMore) {
+      const { data } = await axios.get(
+        `${EBAY_REST_BASE}/sell/inventory/v1/inventory_item?limit=${limit}&offset=${offset}`,
+        {
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+          },
+        }
+      );
+
+      const items = data.inventoryItems ?? [];
+      for (const item of items) {
+        results.push({
+          itemId: item.sku,
+          title: item.product?.title ?? "",
+          quantity: item.availability?.shipToLocationAvailability?.quantity ?? 0,
+          price: Number(item.offerSummary?.lowestPrice?.value ?? 0),
+          description: item.product?.description ?? "",
+          images: (item.product?.imageUrls ?? []).slice(0, 12),
+          variants: [],
+          category: item.product?.categoryPath ?? undefined,
+        });
+      }
+
+      hasMore = items.length === limit;
+      offset += limit;
+    }
+
+    return results;
+  }
+
+  /**
+   * Update quantity via eBay Inventory API (OAuth 2.0).
+   */
+  async updateQuantityOAuth(sku: string, quantity: number): Promise<void> {
+    const token = await this.ensureAccessToken();
+
+    // First get the current inventory item to find its offer IDs
+    await axios.put(
+      `${EBAY_REST_BASE}/sell/inventory/v1/inventory_item/${encodeURIComponent(sku)}`,
+      {
+        availability: {
+          shipToLocationAvailability: {
+            quantity: Math.max(0, quantity),
+          },
+        },
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+      }
+    );
+  }
+
+  // ─── Legacy XML Trading API methods (fallback) ─────────────────────
 
   private headers(callName: string) {
     return {
@@ -43,7 +184,7 @@ export class EbayClient {
     return `<RequesterCredentials><eBayAuthToken>${this.creds.authToken}</eBayAuthToken></RequesterCredentials>`;
   }
 
-  async getSellerListings(): Promise<EbayListing[]> {
+  async getSellerListingsLegacy(): Promise<EbayListing[]> {
     const results: EbayListing[] = [];
     let page = 1;
     let hasMore = true;
@@ -76,19 +217,7 @@ export class EbayClient {
     return results;
   }
 
-  async getItemQuantities(itemIds: string[]): Promise<Record<string, number>> {
-    const result: Record<string, number> = {};
-
-    // Fetch fresh quantities via GetSellerList (all active items)
-    const listings = await this.getSellerListings();
-    for (const l of listings) {
-      result[l.itemId] = l.quantity;
-    }
-
-    return result;
-  }
-
-  async updateQuantity(itemId: string, quantity: number): Promise<void> {
+  async updateQuantityLegacy(itemId: string, quantity: number): Promise<void> {
     const xml = `<?xml version="1.0" encoding="utf-8"?>
 <ReviseInventoryStatusRequest xmlns="urn:ebay:apis:eBLBaseComponents">
   ${this.authBlock()}
@@ -99,6 +228,31 @@ export class EbayClient {
 </ReviseInventoryStatusRequest>`;
 
     await axios.post(EBAY_API_URL, xml, { headers: this.headers("ReviseInventoryStatus") });
+  }
+
+  // ─── Unified API (auto-selects OAuth vs legacy) ────────────────────
+
+  async getSellerListings(): Promise<EbayListing[]> {
+    if (this.usesOAuth) {
+      return this.getSellerListingsOAuth();
+    }
+    return this.getSellerListingsLegacy();
+  }
+
+  async getItemQuantities(itemIds: string[]): Promise<Record<string, number>> {
+    const result: Record<string, number> = {};
+    const listings = await this.getSellerListings();
+    for (const l of listings) {
+      result[l.itemId] = l.quantity;
+    }
+    return result;
+  }
+
+  async updateQuantity(itemId: string, quantity: number): Promise<void> {
+    if (this.usesOAuth) {
+      return this.updateQuantityOAuth(itemId, quantity);
+    }
+    return this.updateQuantityLegacy(itemId, quantity);
   }
 
   private parseItem(item: any): EbayListing {
@@ -119,8 +273,57 @@ export class EbayClient {
   }
 }
 
-function chunkArray<T>(arr: T[], size: number): T[][] {
-  const chunks: T[][] = [];
-  for (let i = 0; i < arr.length; i += size) chunks.push(arr.slice(i, i + size));
-  return chunks;
+/**
+ * Generate the eBay OAuth consent URL for the user to authorize the app.
+ * After consent, eBay redirects back with an authorization code that
+ * can be exchanged for access/refresh tokens via `exchangeEbayAuthCode()`.
+ */
+export function getEbayAuthUrl(appId: string, redirectUri: string, state: string): string {
+  const params = new URLSearchParams({
+    client_id: appId,
+    response_type: "code",
+    redirect_uri: redirectUri,
+    scope: [
+      "https://api.ebay.com/oauth/api_scope/sell.inventory",
+      "https://api.ebay.com/oauth/api_scope/sell.inventory.readonly",
+      "https://api.ebay.com/oauth/api_scope/sell.account",
+      "https://api.ebay.com/oauth/api_scope/sell.account.readonly",
+    ].join(" "),
+    state,
+  });
+
+  return `https://auth.ebay.com/oauth2/authorize?${params.toString()}`;
+}
+
+/**
+ * Exchange an eBay OAuth authorization code for access and refresh tokens.
+ */
+export async function exchangeEbayAuthCode(
+  appId: string,
+  certId: string,
+  code: string,
+  redirectUri: string
+): Promise<{ accessToken: string; refreshToken: string; expiresIn: number }> {
+  const creds = Buffer.from(`${appId}:${certId}`).toString("base64");
+
+  const { data } = await axios.post(
+    EBAY_TOKEN_URL,
+    new URLSearchParams({
+      grant_type: "authorization_code",
+      code,
+      redirect_uri: redirectUri,
+    }).toString(),
+    {
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        Authorization: `Basic ${creds}`,
+      },
+    }
+  );
+
+  return {
+    accessToken: data.access_token,
+    refreshToken: data.refresh_token,
+    expiresIn: data.expires_in,
+  };
 }

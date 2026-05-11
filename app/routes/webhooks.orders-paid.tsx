@@ -16,8 +16,11 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     appId: decrypt(cred.appId),
     certId: decrypt(cred.certId),
     devId: decrypt(cred.devId),
-    authToken: decrypt(cred.authToken),
+    authToken: cred.authToken ? decrypt(cred.authToken) : "",
     sellerId: cred.sellerId,
+    accessToken: cred.accessToken ? decrypt(cred.accessToken) : undefined,
+    refreshToken: cred.refreshToken ? decrypt(cred.refreshToken) : undefined,
+    accessTokenExpiry: cred.accessTokenExpiry ?? undefined,
   });
 
   const lineItems: Array<{ variant_id: string; quantity: number }> = payload.line_items ?? [];

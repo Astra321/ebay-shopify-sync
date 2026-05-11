@@ -3,19 +3,33 @@ import { EbayClient } from "./ebay.server";
 import { ShopifyAdminClient } from "./shopify-api.server";
 import { decrypt } from "./crypto.server";
 import { computeSyncActions, SyncItem, SyncAction } from "./compute-sync-actions.server";
+import type { Session } from "@shopify/shopify-api";
 
 export { computeSyncActions, SyncItem, SyncAction };
 
-export async function runSync(shop: string, accessToken: string): Promise<{ synced: number; errors: Array<{ ebayItemId: string; message: string }> }> {
+/**
+ * Run the bidirectional inventory sync for a shop.
+ * Uses the Shopify session's access token via the official SDK Rest client.
+ * eBay credentials are decrypted at runtime; OAuth access tokens are preferred
+ * over legacy Auth'n'Auth tokens when available.
+ */
+export async function runSync(shop: string, session: Session): Promise<{ synced: number; errors: Array<{ ebayItemId: string; message: string }> }> {
   const cred = await db.ebayCredential.findUniqueOrThrow({ where: { shop } });
+
+  // Build eBay client — prefer OAuth access token over legacy auth token
   const ebay = new EbayClient({
     appId: decrypt(cred.appId),
     certId: decrypt(cred.certId),
     devId: decrypt(cred.devId),
-    authToken: decrypt(cred.authToken),
+    authToken: cred.authToken ? decrypt(cred.authToken) : "",
     sellerId: cred.sellerId,
+    accessToken: cred.accessToken ? decrypt(cred.accessToken) : undefined,
+    refreshToken: cred.refreshToken ? decrypt(cred.refreshToken) : undefined,
+    accessTokenExpiry: cred.accessTokenExpiry ?? undefined,
   });
-  const shopifyClient = new ShopifyAdminClient(shop, accessToken);
+
+  // Shopify client uses the session's access token via SDK
+  const shopifyClient = new ShopifyAdminClient(session);
 
   const mappings = await db.skuMapping.findMany({ where: { shop, isActive: true } });
   if (mappings.length === 0) return { synced: 0, errors: [] };
@@ -55,6 +69,18 @@ export async function runSync(shop: string, accessToken: string): Promise<{ sync
     } catch (err: any) {
       errors.push({ ebayItemId: action.ebayItemId, message: err.message });
     }
+  }
+
+  // Persist refreshed eBay OAuth token if it was updated during sync
+  if (ebay.usesOAuth && (ebay as any).creds.accessToken) {
+    const { encrypt } = await import("./crypto.server");
+    await db.ebayCredential.update({
+      where: { shop },
+      data: {
+        accessToken: encrypt((ebay as any).creds.accessToken),
+        accessTokenExpiry: (ebay as any).creds.accessTokenExpiry,
+      },
+    });
   }
 
   return { synced, errors };

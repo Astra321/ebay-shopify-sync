@@ -1,10 +1,11 @@
-import { shopifyApp, DeliveryMethod } from "@shopify/shopify-app-remix";
+import { shopifyApp, DeliveryMethod } from "@shopify/shopify-app-remix/server";
 import { PrismaSessionStorage } from "@shopify/shopify-app-session-storage-prisma";
 import { db } from "./db.server";
 
 const shopify = shopifyApp({
   apiKey: process.env.SHOPIFY_API_KEY!,
   apiSecretKey: process.env.SHOPIFY_API_SECRET!,
+  appUrl: process.env.SHOPIFY_APP_URL ?? process.env.HOST ?? "http://localhost:3000",
   scopes: (process.env.SCOPES ?? "write_products,write_inventory,read_orders").split(","),
   sessionStorage: new PrismaSessionStorage(db),
   apiVersion: "2024-01",

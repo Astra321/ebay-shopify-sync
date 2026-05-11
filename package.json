@@ -23,6 +23,7 @@
     "@shopify/polaris-icons": "^9.3.0",
     "@shopify/shopify-api": "^13.0.0",
     "@shopify/shopify-app-remix": "^4.2.0",
+    "@shopify/shopify-app-session-storage-prisma": "^9.0.0",
     "axios": "^1.7.9",
     "bullmq": "^5.30.0",
     "fast-xml-parser": "^4.5.1",

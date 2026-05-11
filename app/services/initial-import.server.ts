@@ -1,18 +1,25 @@
 import { db } from "../db.server";
 import { EbayClient, EbayCredentials, EbayListing } from "./ebay.server";
 import { ShopifyAdminClient } from "./shopify-api.server";
-import { decrypt } from "./crypto.server";
+import { decrypt, encrypt } from "./crypto.server";
+import type { Session } from "@shopify/shopify-api";
 
-export async function runInitialImport(shop: string, accessToken: string): Promise<{ imported: number; skipped: number; errors: string[] }> {
+export async function runInitialImport(shop: string, session: Session): Promise<{ imported: number; skipped: number; errors: string[] }> {
   const cred = await db.ebayCredential.findUniqueOrThrow({ where: { shop } });
+
   const ebay = new EbayClient({
     appId: decrypt(cred.appId),
     certId: decrypt(cred.certId),
     devId: decrypt(cred.devId),
-    authToken: decrypt(cred.authToken),
+    authToken: cred.authToken ? decrypt(cred.authToken) : "",
     sellerId: cred.sellerId,
+    accessToken: cred.accessToken ? decrypt(cred.accessToken) : undefined,
+    refreshToken: cred.refreshToken ? decrypt(cred.refreshToken) : undefined,
+    accessTokenExpiry: cred.accessTokenExpiry ?? undefined,
   });
-  const shopify = new ShopifyAdminClient(shop, accessToken);
+
+  // Shopify client uses the session's access token via SDK
+  const shopify = new ShopifyAdminClient(session);
 
   const listings = await ebay.getSellerListings();
   const locationId = await shopify.getLocationId();
@@ -67,6 +74,17 @@ export async function runInitialImport(shop: string, accessToken: string): Promi
     } catch (err: any) {
       errors.push(`eBay ${listing.itemId}: ${err.message}`);
     }
+  }
+
+  // Persist refreshed eBay OAuth token if it was updated during import
+  if (ebay.usesOAuth && (ebay as any).creds.accessToken) {
+    await db.ebayCredential.update({
+      where: { shop },
+      data: {
+        accessToken: encrypt((ebay as any).creds.accessToken),
+        accessTokenExpiry: (ebay as any).creds.accessTokenExpiry,
+      },
+    });
   }
 
   return { imported, skipped, errors };

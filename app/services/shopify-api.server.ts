@@ -1,4 +1,5 @@
-import axios from "axios";
+import shopify from "../shopify.server";
+import type { Session } from "@shopify/shopify-api";
 
 export interface ShopifyProduct {
   id: string;
@@ -13,16 +14,19 @@ export interface ShopifyVariant {
   title: string;
 }
 
+/**
+ * Shopify Admin API client that uses the official Shopify SDK's built-in
+ * Rest client with the session's access token for authentication.
+ * No manual token management needed — the SDK handles auth, rate limiting,
+ * and API versioning automatically.
+ */
 export class ShopifyAdminClient {
-  private base: string;
-  private headers: Record<string, string>;
+  private client: InstanceType<typeof shopify.api.clients.Rest>;
+  private session: Session;
 
-  constructor(shop: string, accessToken: string) {
-    this.base = `https://${shop}/admin/api/2024-01`;
-    this.headers = {
-      "X-Shopify-Access-Token": accessToken,
-      "Content-Type": "application/json",
-    };
+  constructor(session: Session) {
+    this.session = session;
+    this.client = new shopify.api.clients.Rest({ session });
   }
 
   async createProduct(data: {
@@ -33,46 +37,55 @@ export class ShopifyAdminClient {
     images: Array<{ src: string }>;
     variants: Array<{ title: string; price: string; sku: string; inventory_management: string }>;
   }): Promise<ShopifyProduct> {
-    const { data: res } = await axios.post(
-      `${this.base}/products.json`,
-      { product: data },
-      { headers: this.headers }
-    );
-    return this.parseProduct(res.product);
+    const response = await this.client.post({
+      path: "products.json",
+      data: { product: data },
+    });
+    const body = response.body as any;
+    return this.parseProduct(body.product);
   }
 
   async getLocationId(): Promise<string> {
-    const { data } = await axios.get(`${this.base}/locations.json`, { headers: this.headers });
-    return String(data.locations[0].id);
+    const response = await this.client.get({
+      path: "locations.json",
+    });
+    const body = response.body as any;
+    return String(body.locations[0].id);
   }
 
   async getInventoryLevels(inventoryItemIds: string[]): Promise<Record<string, number>> {
     const ids = inventoryItemIds.join(",");
-    const { data } = await axios.get(
-      `${this.base}/inventory_levels.json?inventory_item_ids=${ids}&limit=250`,
-      { headers: this.headers }
-    );
+    const response = await this.client.get({
+      path: "inventory_levels.json",
+      query: { inventory_item_ids: ids, limit: "250" },
+    });
+    const body = response.body as any;
     const result: Record<string, number> = {};
-    for (const level of data.inventory_levels) {
+    for (const level of body.inventory_levels) {
       result[String(level.inventory_item_id)] = level.available ?? 0;
     }
     return result;
   }
 
   async setInventoryLevel(locationId: string, inventoryItemId: string, available: number): Promise<void> {
-    await axios.post(
-      `${this.base}/inventory_levels/set.json`,
-      { location_id: locationId, inventory_item_id: inventoryItemId, available: Math.max(0, available) },
-      { headers: this.headers }
-    );
+    await this.client.post({
+      path: "inventory_levels/set.json",
+      data: {
+        location_id: locationId,
+        inventory_item_id: inventoryItemId,
+        available: Math.max(0, available),
+      },
+    });
   }
 
   async connectInventoryToLocation(inventoryItemId: string, locationId: string): Promise<void> {
-    await axios.post(
-      `${this.base}/inventory_levels/connect.json`,
-      { location_id: locationId, inventory_item_id: inventoryItemId },
-      { headers: this.headers }
-    );
+    await this.client.post({
+      path: "inventory_levels/connect.json",
+      data: {
+        location_id: locationId,
+        inventory_item_id: inventoryItemId,
+      },
+    });
   }
 
   private parseProduct(p: any): ShopifyProduct {
