@@ -1,16 +1,32 @@
 import { LoaderFunctionArgs, json } from "@remix-run/node";
 import { useLoaderData, useFetcher, useRevalidator } from "@remix-run/react";
 import {
-  Page, Layout, Card, BlockStack, Text, Button, Banner, Badge, Divider,
-  InlineStack, Tooltip, Frame, Spinner,
+  Page,
+  Layout,
+  Card,
+  BlockStack,
+  Text,
+  Button,
+  Banner,
+  Badge,
+  Divider,
+  InlineStack,
+  Tooltip,
+  Spinner,
+  ButtonGroup,
 } from "@shopify/polaris";
 import { useCallback, useEffect, useState } from "react";
 import { StatsGrid } from "../components/StatsGrid";
 import { SyncStatusBanner } from "../components/SyncStatusBanner";
 import {
-  getDemoMappings, getDemoSyncLogs, getDemoErrors,
-  runDemoSync, simulateEbayOrder, simulateShopifyOrder,
-  isDemoSyncRunning, resetDemoData,
+  getDemoMappings,
+  getDemoSyncLogs,
+  getDemoErrors,
+  runDemoSync,
+  simulateEbayOrder,
+  simulateShopifyOrder,
+  isDemoSyncRunning,
+  resetDemoData,
 } from "../demo/demo-data";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
@@ -26,16 +42,26 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
   return json({
     totalMapped,
-    lastLog: lastLog ? {
-      status: lastLog.status,
-      startedAt: lastLog.startedAt,
-      finishedAt: lastLog.finishedAt,
-      itemsSynced: lastLog.itemsSynced,
-    } : null,
+    lastLog: lastLog
+      ? {
+          status: lastLog.status,
+          startedAt: lastLog.startedAt,
+          finishedAt: lastLog.finishedAt,
+          itemsSynced: lastLog.itemsSynced,
+        }
+      : null,
     errorCount: errors.length,
     mismatchedCount: mismatchedItems.length,
-    mappings: mappings.slice(0, 8), // Show top 8 on dashboard
+    mappings: mappings.slice(0, 8),
     syncRunning: isDemoSyncRunning(),
+    syncLogs: syncLogs.slice(0, 5).map((log) => ({
+      id: log.id,
+      status: log.status,
+      startedAt: log.startedAt,
+      finishedAt: log.finishedAt,
+      itemsSynced: log.itemsSynced,
+      errorCount: log.errors.length,
+    })),
   });
 };
 
@@ -65,19 +91,23 @@ export default function DemoDashboard() {
   const data = useLoaderData<typeof loader>();
   const fetcher = useFetcher();
   const revalidator = useRevalidator();
-  const [polling, setPolling] = useState(false);
 
   const isSyncing = fetcher.state !== "idle";
 
   const nextSyncTime = data.lastLog?.finishedAt
-    ? new Date(new Date(data.lastLog.finishedAt).getTime() + 15 * 60 * 1000).toLocaleTimeString()
+    ? new Date(
+        new Date(data.lastLog.finishedAt).getTime() + 15 * 60 * 1000
+      ).toLocaleTimeString()
     : null;
 
-  const handleAction = useCallback((action: string) => {
-    fetcher.submit({ action }, { method: "post" });
-  }, [fetcher]);
+  const handleAction = useCallback(
+    (action: string) => {
+      fetcher.submit({ action }, { method: "post" });
+    },
+    [fetcher]
+  );
 
-  // Auto-refresh after sync completes
+  // Auto-refresh after actions
   useEffect(() => {
     if (fetcher.state === "idle" && fetcher.data) {
       revalidator.revalidate();
@@ -110,15 +140,18 @@ export default function DemoDashboard() {
             {/* Demo mode banner */}
             <Banner tone="info" title="Demo Mode Active">
               <Text as="p" variant="bodyMd">
-                This is a fully interactive demo with simulated data. No real eBay or Shopify
-                connections needed. Use the simulation controls below to trigger orders on either
-                platform, then run a sync to see the lowest-stock-wins logic in action.
+                This is a fully interactive demo with simulated data. No real
+                eBay or Shopify connections needed. Use the simulation controls
+                below to trigger orders on either platform, then run a sync to
+                see the lowest-stock-wins logic in action.
               </Text>
             </Banner>
 
             <SyncStatusBanner
               status={data.lastLog?.status ?? null}
-              lastSyncTime={data.lastLog?.finishedAt ?? data.lastLog?.startedAt ?? null}
+              lastSyncTime={
+                data.lastLog?.finishedAt ?? data.lastLog?.startedAt ?? null
+              }
             />
 
             <StatsGrid
@@ -137,11 +170,14 @@ export default function DemoDashboard() {
                     <Text as="h2" variant="headingMd">
                       Quantity Mismatches
                     </Text>
-                    <Badge tone="warning">{data.mismatchedCount} items need sync</Badge>
+                    <Badge tone="warning">
+                      {data.mismatchedCount} items need sync
+                    </Badge>
                   </InlineStack>
                   <Text as="p" variant="bodyMd" tone="subdued">
-                    These items have different inventory levels between eBay and Shopify.
-                    Running a sync will apply the lowest quantity to both platforms to prevent overselling.
+                    These items have different inventory levels between eBay and
+                    Shopify. Running a sync will apply the lowest quantity to
+                    both platforms to prevent overselling.
                   </Text>
                   <Divider />
                   <div style={{ overflowX: "auto" }}>
@@ -159,28 +195,55 @@ export default function DemoDashboard() {
                         {data.mappings
                           .filter((m) => m.isActive && m.ebayQty !== m.shopifyQty)
                           .map((m) => {
-                            const target = Math.max(0, Math.min(m.ebayQty, m.shopifyQty));
+                            const target = Math.max(
+                              0,
+                              Math.min(m.ebayQty, m.shopifyQty)
+                            );
                             return (
-                              <tr key={m.id} style={{ borderBottom: "1px solid #f1f2f3" }}>
+                              <tr
+                                key={m.id}
+                                style={{ borderBottom: "1px solid #f1f2f3" }}
+                              >
                                 <td style={tdStyle}>
                                   <InlineStack gap="200" blockAlign="center">
                                     <img
                                       src={m.imageUrl}
                                       alt=""
-                                      style={{ width: 32, height: 32, borderRadius: 4, objectFit: "cover" }}
+                                      style={{
+                                        width: 32,
+                                        height: 32,
+                                        borderRadius: 4,
+                                        objectFit: "cover",
+                                      }}
                                     />
-                                    <Text as="span" variant="bodyMd" fontWeight="medium">
+                                    <Text
+                                      as="span"
+                                      variant="bodyMd"
+                                      fontWeight="medium"
+                                    >
                                       {m.ebayTitle}
                                     </Text>
                                   </InlineStack>
                                 </td>
                                 <td style={tdStyle}>
-                                  <Badge tone={m.ebayQty < m.shopifyQty ? "critical" : "success"}>
+                                  <Badge
+                                    tone={
+                                      m.ebayQty < m.shopifyQty
+                                        ? "critical"
+                                        : "success"
+                                    }
+                                  >
                                     {m.ebayQty}
                                   </Badge>
                                 </td>
                                 <td style={tdStyle}>
-                                  <Badge tone={m.shopifyQty < m.ebayQty ? "critical" : "success"}>
+                                  <Badge
+                                    tone={
+                                      m.shopifyQty < m.ebayQty
+                                        ? "critical"
+                                        : "success"
+                                    }
+                                  >
                                     {m.shopifyQty}
                                   </Badge>
                                 </td>
@@ -188,8 +251,14 @@ export default function DemoDashboard() {
                                   <Badge tone="info">{target}</Badge>
                                 </td>
                                 <td style={tdStyle}>
-                                  <Text as="span" variant="bodySm" tone="subdued">
-                                    {m.ebayQty < m.shopifyQty ? "Update Shopify" : "Update eBay"}
+                                  <Text
+                                    as="span"
+                                    variant="bodySm"
+                                    tone="subdued"
+                                  >
+                                    {m.ebayQty < m.shopifyQty
+                                      ? "Update Shopify"
+                                      : "Update eBay"}
                                   </Text>
                                 </td>
                               </tr>
@@ -205,10 +274,13 @@ export default function DemoDashboard() {
             {/* Simulation controls */}
             <Card>
               <BlockStack gap="400">
-                <Text as="h2" variant="headingMd">Simulation Controls</Text>
+                <Text as="h2" variant="headingMd">
+                  Simulation Controls
+                </Text>
                 <Text as="p" variant="bodyMd" tone="subdued">
-                  Simulate real-world events to test the sync engine. Place orders on either
-                  platform to create inventory mismatches, then run a sync to resolve them.
+                  Simulate real-world events to test the sync engine. Place
+                  orders on either platform to create inventory mismatches, then
+                  run a sync to resolve them.
                 </Text>
                 <Divider />
                 <InlineStack gap="300" align="start">
@@ -231,10 +303,12 @@ export default function DemoDashboard() {
               </BlockStack>
             </Card>
 
-            {/* Recent activity */}
+            {/* Recent sync history */}
             <Card>
               <BlockStack gap="400">
-                <Text as="h2" variant="headingMd">Recent Sync History</Text>
+                <Text as="h2" variant="headingMd">
+                  Recent Sync History
+                </Text>
                 <div style={{ overflowX: "auto" }}>
                   <table style={{ width: "100%", borderCollapse: "collapse" }}>
                     <thead>
@@ -247,28 +321,61 @@ export default function DemoDashboard() {
                       </tr>
                     </thead>
                     <tbody>
-                      {getDemoSyncLogs().slice(0, 5).map((log) => {
-                        const duration = log.finishedAt
-                          ? Math.round((new Date(log.finishedAt).getTime() - new Date(log.startedAt).getTime()) / 1000)
-                          : "—";
-                        return (
-                          <tr key={log.id} style={{ borderBottom: "1px solid #f1f2f3" }}>
-                            <td style={tdStyle}>
-                              <Badge tone={
-                                log.status === "SUCCESS" ? "success" :
-                                log.status === "PARTIAL" ? "warning" :
-                                log.status === "FAILED" ? "critical" : "info"
-                              }>
-                                {log.status}
-                              </Badge>
-                            </td>
-                            <td style={tdStyle}>{log.itemsSynced}</td>
-                            <td style={tdStyle}>{log.errors.length}</td>
-                            <td style={tdStyle}>{new Date(log.startedAt).toLocaleString()}</td>
-                            <td style={tdStyle}>{typeof duration === "number" ? `${duration}s` : duration}</td>
-                          </tr>
-                        );
-                      })}
+                      {data.syncLogs.length === 0 ? (
+                        <tr>
+                          <td
+                            colSpan={5}
+                            style={{
+                              ...tdStyle,
+                              textAlign: "center",
+                              color: "#8c9196",
+                              padding: 24,
+                            }}
+                          >
+                            No sync history yet. Run your first sync!
+                          </td>
+                        </tr>
+                      ) : (
+                        data.syncLogs.map((log) => {
+                          const duration = log.finishedAt
+                            ? Math.round(
+                                (new Date(log.finishedAt).getTime() -
+                                  new Date(log.startedAt).getTime()) /
+                                  1000
+                              )
+                            : null;
+                          return (
+                            <tr
+                              key={log.id}
+                              style={{ borderBottom: "1px solid #f1f2f3" }}
+                            >
+                              <td style={tdStyle}>
+                                <Badge
+                                  tone={
+                                    log.status === "SUCCESS"
+                                      ? "success"
+                                      : log.status === "PARTIAL"
+                                      ? "warning"
+                                      : log.status === "FAILED"
+                                      ? "critical"
+                                      : "info"
+                                  }
+                                >
+                                  {log.status}
+                                </Badge>
+                              </td>
+                              <td style={tdStyle}>{log.itemsSynced}</td>
+                              <td style={tdStyle}>{log.errorCount}</td>
+                              <td style={tdStyle}>
+                                {new Date(log.startedAt).toLocaleString()}
+                              </td>
+                              <td style={tdStyle}>
+                                {duration !== null ? `${duration}s` : "—"}
+                              </td>
+                            </tr>
+                          );
+                        })
+                      )}
                     </tbody>
                   </table>
                 </div>
