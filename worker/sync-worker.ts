@@ -2,8 +2,8 @@ import "dotenv/config";
 import { Worker } from "bullmq";
 import IORedis from "ioredis";
 import { PrismaClient } from "@prisma/client";
+import { Session } from "@shopify/shopify-api";
 import { runSync } from "../app/services/sync-engine.server";
-import shopify from "../app/shopify.server";
 
 const connection = new IORedis(process.env.REDIS_URL!, { maxRetriesPerRequest: null });
 const db = new PrismaClient();
@@ -14,19 +14,23 @@ const worker = new Worker(
     const { shop } = job.data;
     console.log(`[sync] Starting sync for ${shop}`);
 
-    // Get the offline session for this shop
-    const session = await db.session.findFirst({ where: { shop, isOnline: false } });
-    if (!session) {
+    // Load the offline (app-level) session from Prisma session storage
+    const row = await db.session.findFirst({ where: { shop, isOnline: false } });
+    if (!row) {
       console.warn(`[sync] No session found for ${shop} — skipping`);
       return;
     }
 
-    // Create an authenticated Shopify session object for the SDK Rest client
-    const shopifySession = await shopify.authenticate.session.find(shop);
-    if (!shopifySession) {
-      console.warn(`[sync] No Shopify session found for ${shop} — skipping`);
-      return;
-    }
+    // Construct a typed Session object from the stored row
+    const shopifySession = new Session({
+      id: row.id,
+      shop: row.shop,
+      state: row.state,
+      isOnline: row.isOnline,
+      accessToken: row.accessToken,
+      scope: row.scope ?? undefined,
+      expires: row.expires ?? undefined,
+    });
 
     const log = await db.syncLog.create({ data: { shop, jobId: String(job.id) } });
 

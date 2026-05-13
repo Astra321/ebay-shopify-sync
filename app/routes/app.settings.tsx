@@ -3,7 +3,7 @@ import { useLoaderData, useActionData } from "@remix-run/react";
 import { Page, Layout, BlockStack, Card, Text, Button, Banner, Divider } from "@shopify/polaris";
 import { authenticate } from "../shopify.server";
 import { db } from "../db.server";
-import { encrypt } from "../services/crypto.server";
+import { encrypt, decrypt } from "../services/crypto.server";
 import { getEbayAuthUrl } from "../services/ebay.server";
 import { CredentialsForm } from "../components/CredentialsForm";
 
@@ -13,7 +13,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const hasCreds = !!cred;
   const hasOAuth = !!(cred?.refreshToken);
   const oAuthUrl = hasCreds && cred.redirectUri
-    ? getEbayAuthUrl(cred.appId, cred.redirectUri, session.shop)
+    ? getEbayAuthUrl(decrypt(cred.appId), cred.redirectUri, session.shop)
     : null;
 
   return json({ hasCreds, hasOAuth, oAuthUrl });
