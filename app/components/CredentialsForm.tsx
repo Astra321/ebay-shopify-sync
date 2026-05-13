@@ -9,15 +9,16 @@ interface Props {
   error?: string;
   hasOAuth?: boolean;
   oAuthUrl?: string;
+  defaultRuName?: string;
 }
 
-export function CredentialsForm({ saved, error, hasOAuth, oAuthUrl }: Props) {
+export function CredentialsForm({ saved, error, hasOAuth, oAuthUrl, defaultRuName = "" }: Props) {
   const [appId, setAppId] = useState("");
   const [certId, setCertId] = useState("");
   const [devId, setDevId] = useState("");
   const [authToken, setAuthToken] = useState("");
   const [sellerId, setSellerId] = useState("");
-  const [redirectUri, setRedirectUri] = useState("");
+  const [redirectUri, setRedirectUri] = useState(defaultRuName);
 
   return (
     <Card>
@@ -80,7 +81,7 @@ export function CredentialsForm({ saved, error, hasOAuth, oAuthUrl }: Props) {
               value={redirectUri}
               onChange={setRedirectUri}
               autoComplete="off"
-              helpText="The redirect URI (RuName) registered in your eBay developer portal. Required for OAuth 2.0 authorization flow."
+              helpText="Pre-filled from your eBay developer portal RuName. Leave as-is unless you have a different RuName."
             />
             <Divider />
             <Text as="h3" variant="headingSm">Legacy Auth Token (Optional)</Text>

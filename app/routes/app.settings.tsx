@@ -12,11 +12,15 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const cred = await db.ebayCredential.findUnique({ where: { shop: session.shop } });
   const hasCreds = !!cred;
   const hasOAuth = !!(cred?.refreshToken);
-  const oAuthUrl = hasCreds && cred.redirectUri
-    ? getEbayAuthUrl(decrypt(cred.appId), cred.redirectUri, session.shop)
+
+  // Resolve RuName: prefer what's stored in DB, fall back to env var
+  const ruName = cred?.redirectUri ?? process.env.EBAY_RUNAME ?? null;
+  const appId = hasCreds ? decrypt(cred!.appId) : (process.env.EBAY_APP_ID ?? null);
+  const oAuthUrl = ruName && appId
+    ? getEbayAuthUrl(appId, ruName, session.shop)
     : null;
 
-  return json({ hasCreds, hasOAuth, oAuthUrl });
+  return json({ hasCreds, hasOAuth, oAuthUrl, defaultRuName: process.env.EBAY_RUNAME ?? "" });
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
@@ -28,14 +32,15 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const devId = form.get("devId") as string;
   const authToken = (form.get("authToken") as string) || "";
   const sellerId = form.get("sellerId") as string;
-  const redirectUri = (form.get("redirectUri") as string) || "";
+  // Fall back to env var so the user doesn't need to re-type the RuName
+  const redirectUri = (form.get("redirectUri") as string) || process.env.EBAY_RUNAME || "";
 
   if (!appId || !certId || !devId || !sellerId) {
     return json({ saved: false, error: "App ID, Cert ID, Dev ID, and Seller ID are required." });
   }
 
   if (!authToken && !redirectUri) {
-    return json({ saved: false, error: "Either a legacy Auth Token or an OAuth Redirect URI is required to authenticate with eBay." });
+    return json({ saved: false, error: "Either a legacy Auth Token or an OAuth RuName is required." });
   }
 
   await db.ebayCredential.upsert({
@@ -63,7 +68,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 };
 
 export default function SettingsPage() {
-  const { hasCreds, hasOAuth, oAuthUrl } = useLoaderData<typeof loader>();
+  const { hasCreds, hasOAuth, oAuthUrl, defaultRuName } = useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
 
   return (
@@ -79,6 +84,7 @@ export default function SettingsPage() {
               error={actionData?.error}
               hasOAuth={hasOAuth}
               oAuthUrl={oAuthUrl ?? undefined}
+              defaultRuName={defaultRuName}
             />
 
             {oAuthUrl && !hasOAuth && (
