@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(curl -s -X POST https://backboard.railway.app/graphql/v2 -H 'Authorization: Bearer b4a8a364-4dea-4386-921b-059d2cc190dd' -H 'Content-Type: application/json' -d '{\"query\":\"mutation { serviceInstanceUpdate\\(serviceId: \\\\\"e3afb3c8-60d9-4439-aa53-88bc0427f795\\\\\", environmentId: \\\\\"19c481de-a39d-497a-9df0-2d9998b7c0b2\\\\\", input: { healthcheckPath: \\\\\"/demo\\\\\" }\\) }\"}')",
+      "Bash(python3 -m json.tool)"
+    ]
+  }
+}
