@@ -21,7 +21,7 @@ function getShopify() {
         "write_products,write_inventory,read_orders"
       ).split(","),
       sessionStorage: new PrismaSessionStorage(db),
-      apiVersion: "2024-01",
+      apiVersion: "2025-07",
       distributable: true,
       future: {
         unstable_newEmbeddedAuthStrategy: true,
