@@ -4,9 +4,13 @@ import { Link } from "@remix-run/react";
 
 export const loader = ({ request }: LoaderFunctionArgs) => {
   const url = new URL(request.url);
-  // When opened from Shopify admin the URL will have a `shop` param — go into the app
-  if (url.searchParams.has("shop")) {
-    return redirect(`/app?${url.searchParams.toString()}`);
+  const shop = url.searchParams.get("shop");
+  if (shop) {
+    // If Shopify itself opened the app (embedded admin iframe), `host` is set —
+    // jump straight into the app. Otherwise this is a manual install link, so
+    // kick off the OAuth install flow via /auth/login.
+    const target = url.searchParams.has("host") ? "/app" : "/auth/login";
+    return redirect(`${target}?${url.searchParams.toString()}`);
   }
   return null;
 };
