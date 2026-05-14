@@ -11,34 +11,54 @@ export interface ShopifyVariant {
   title: string;
 }
 
-// Minimal shape of the admin.rest client returned by Shopify App Remix authenticate.admin()
-interface AdminRest {
-  get(args: { path: string; query?: Record<string, string | number> }): Promise<Response>;
-  post(args: { path: string; data?: unknown }): Promise<Response>;
-  put(args: { path: string; data?: unknown }): Promise<Response>;
-  delete(args: { path: string }): Promise<Response>;
-}
+// admin.graphql() function from shopify-app-remix authenticate.admin()
+type GraphqlFn = (
+  query: string,
+  options?: { variables?: Record<string, unknown> },
+) => Promise<Response>;
 
 interface AdminClient {
-  rest: AdminRest;
+  graphql: GraphqlFn;
+}
+
+// Convert numeric/string ID to Shopify GID (e.g. "123" -> "gid://shopify/Location/123")
+function toGid(type: string, id: string): string {
+  if (id.startsWith("gid://")) return id;
+  return `gid://shopify/${type}/${id}`;
+}
+
+// Extract numeric ID from a GID (e.g. "gid://shopify/Location/123" -> "123")
+function fromGid(gid: string): string {
+  const i = gid.lastIndexOf("/");
+  return i >= 0 ? gid.slice(i + 1) : gid;
 }
 
 export class ShopifyAdminClient {
-  private rest: AdminRest;
+  private graphql: GraphqlFn;
 
   constructor(admin: AdminClient) {
-    this.rest = admin.rest;
+    this.graphql = admin.graphql;
   }
 
-  private async readJson(res: Response, method: string, path: string): Promise<any> {
-    if (!res.ok) {
-      const text = await res.text();
-      throw new Error(`Shopify API ${res.status} on ${method} ${path}: ${text}`);
+  private async run<T>(query: string, variables?: Record<string, unknown>): Promise<T> {
+    const res = await this.graphql(query, variables ? { variables } : undefined);
+    const body = await res.json();
+    if (body.errors) {
+      throw new Error(`Shopify GraphQL error: ${JSON.stringify(body.errors)}`);
     }
-    return res.json();
+    return body.data as T;
   }
 
-  async createProduct(data: {
+  async getLocationId(): Promise<string> {
+    const data = await this.run<{ locations: { edges: Array<{ node: { id: string } }> } }>(
+      `#graphql
+        query { locations(first: 1) { edges { node { id } } } }`,
+    );
+    if (!data.locations.edges.length) throw new Error("No locations found in Shopify store");
+    return fromGid(data.locations.edges[0].node.id);
+  }
+
+  async createProduct(input: {
     title: string;
     body_html: string;
     vendor: string;
@@ -46,61 +66,141 @@ export class ShopifyAdminClient {
     images: Array<{ src: string }>;
     variants: Array<{ title: string; price: string; sku: string; inventory_management: string }>;
   }): Promise<ShopifyProduct> {
-    const res = await this.rest.post({ path: "products", data: { product: data } });
-    const body = await this.readJson(res, "POST", "products");
-    return this.parseProduct(body.product);
-  }
+    const v = input.variants[0];
+    const data = await this.run<{
+      productCreate: {
+        product: {
+          id: string;
+          variants: { edges: Array<{ node: { id: string; sku: string; price: string; title: string; inventoryItem: { id: string } } }> };
+        } | null;
+        userErrors: Array<{ field: string[]; message: string }>;
+      };
+    }>(
+      `#graphql
+        mutation productCreate($input: ProductInput!) {
+          productCreate(input: $input) {
+            product {
+              id
+              variants(first: 1) {
+                edges { node { id sku price title inventoryItem { id } } }
+              }
+            }
+            userErrors { field message }
+          }
+        }`,
+      {
+        input: {
+          title: input.title,
+          descriptionHtml: input.body_html,
+          vendor: input.vendor,
+          productType: input.product_type,
+          variants: [
+            {
+              price: v.price,
+              sku: v.sku,
+              inventoryManagement: "SHOPIFY",
+            },
+          ],
+        },
+      },
+    );
 
-  async getLocationId(): Promise<string> {
-    const res = await this.rest.get({ path: "locations" });
-    const body = await this.readJson(res, "GET", "locations");
-    if (!body.locations?.length) throw new Error("No locations found in Shopify store");
-    return String(body.locations[0].id);
+    if (data.productCreate.userErrors.length > 0) {
+      throw new Error(`productCreate failed: ${data.productCreate.userErrors.map((e) => e.message).join(", ")}`);
+    }
+    const p = data.productCreate.product!;
+    const variants: ShopifyVariant[] = p.variants.edges.map((e) => ({
+      id: fromGid(e.node.id),
+      inventoryItemId: fromGid(e.node.inventoryItem.id),
+      sku: e.node.sku ?? "",
+      price: String(e.node.price),
+      title: e.node.title,
+    }));
+    return { id: fromGid(p.id), variants };
   }
 
   async getInventoryLevels(inventoryItemIds: string[]): Promise<Record<string, number>> {
-    const res = await this.rest.get({
-      path: "inventory_levels",
-      query: { inventory_item_ids: inventoryItemIds.join(","), limit: 250 },
-    });
-    const body = await this.readJson(res, "GET", "inventory_levels");
+    if (inventoryItemIds.length === 0) return {};
+    const gids = inventoryItemIds.map((id) => toGid("InventoryItem", id));
+    const data = await this.run<{
+      nodes: Array<{
+        id: string;
+        inventoryLevels: { edges: Array<{ node: { quantities: Array<{ name: string; quantity: number }> } }> };
+      } | null>;
+    }>(
+      `#graphql
+        query getLevels($ids: [ID!]!) {
+          nodes(ids: $ids) {
+            ... on InventoryItem {
+              id
+              inventoryLevels(first: 5) {
+                edges { node { quantities(names: ["available"]) { name quantity } } }
+              }
+            }
+          }
+        }`,
+      { ids: gids },
+    );
+
     const result: Record<string, number> = {};
-    for (const level of body.inventory_levels) {
-      result[String(level.inventory_item_id)] = level.available ?? 0;
+    for (const node of data.nodes) {
+      if (!node) continue;
+      const itemId = fromGid(node.id);
+      const firstLevel = node.inventoryLevels.edges[0]?.node;
+      const available = firstLevel?.quantities.find((q) => q.name === "available")?.quantity ?? 0;
+      result[itemId] = available;
     }
     return result;
   }
 
   async setInventoryLevel(locationId: string, inventoryItemId: string, available: number): Promise<void> {
-    const res = await this.rest.post({
-      path: "inventory_levels/set",
-      data: {
-        location_id: locationId,
-        inventory_item_id: inventoryItemId,
-        available: Math.max(0, available),
+    const data = await this.run<{
+      inventorySetQuantities: { userErrors: Array<{ field: string[]; message: string }> };
+    }>(
+      `#graphql
+        mutation setQty($input: InventorySetQuantitiesInput!) {
+          inventorySetQuantities(input: $input) {
+            userErrors { field message }
+          }
+        }`,
+      {
+        input: {
+          name: "available",
+          reason: "correction",
+          ignoreCompareQuantity: true,
+          quantities: [
+            {
+              inventoryItemId: toGid("InventoryItem", inventoryItemId),
+              locationId: toGid("Location", locationId),
+              quantity: Math.max(0, available),
+            },
+          ],
+        },
       },
-    });
-    await this.readJson(res, "POST", "inventory_levels/set");
+    );
+    if (data.inventorySetQuantities.userErrors.length > 0) {
+      throw new Error(`inventorySetQuantities failed: ${data.inventorySetQuantities.userErrors.map((e) => e.message).join(", ")}`);
+    }
   }
 
   async connectInventoryToLocation(inventoryItemId: string, locationId: string): Promise<void> {
-    const res = await this.rest.post({
-      path: "inventory_levels/connect",
-      data: { location_id: locationId, inventory_item_id: inventoryItemId },
-    });
-    await this.readJson(res, "POST", "inventory_levels/connect");
-  }
-
-  private parseProduct(p: any): ShopifyProduct {
-    return {
-      id: String(p.id),
-      variants: (p.variants ?? []).map((v: any) => ({
-        id: String(v.id),
-        inventoryItemId: String(v.inventory_item_id),
-        sku: v.sku ?? "",
-        price: String(v.price),
-        title: v.title,
-      })),
-    };
+    const data = await this.run<{
+      inventoryActivate: { userErrors: Array<{ field: string[]; message: string }> };
+    }>(
+      `#graphql
+        mutation activate($inventoryItemId: ID!, $locationId: ID!) {
+          inventoryActivate(inventoryItemId: $inventoryItemId, locationId: $locationId) {
+            userErrors { field message }
+          }
+        }`,
+      {
+        inventoryItemId: toGid("InventoryItem", inventoryItemId),
+        locationId: toGid("Location", locationId),
+      },
+    );
+    if (data.inventoryActivate.userErrors.length > 0) {
+      // "already activated" is fine — caller swallows errors anyway
+      throw new Error(`inventoryActivate: ${data.inventoryActivate.userErrors.map((e) => e.message).join(", ")}`);
+    }
   }
 }
