@@ -96,6 +96,7 @@ export default function AppIndex() {
     <Page
       title="eBay ↔ Shopify Sync"
       primaryAction={{ content: "Settings", onAction: () => navigate("/app/settings") }}
+      secondaryActions={[{ content: "Seed Demo Data", onAction: () => navigate("/app/seed") }]}
     >
       <Layout>
         <Layout.Section>
