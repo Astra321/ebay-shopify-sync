@@ -11,21 +11,18 @@ import { db } from "../db.server";
 
 export const action = async ({ request }: ActionFunctionArgs) => {
   const { session, admin } = await authenticate.admin(request);
+  // Run sync directly. The BullMQ queue is reserved for scheduled periodic
+  // syncs; the worker process isn't running on Railway, so dispatching a job
+  // would just sit forever. For user-triggered syncs, run inline.
   try {
-    const { triggerImmediateSync } = await import("../queue.server");
-    await triggerImmediateSync(session.shop);
-    return json({ ok: true, message: "Sync queued. Watching progress…" });
-  } catch {
-    try {
-      const { runSync } = await import("../services/sync-engine.server");
-      const result = await runSync(session.shop, admin);
-      return json({
-        ok: true,
-        message: `Sync complete — ${result.synced} item(s) updated${result.errors.length > 0 ? `, ${result.errors.length} error(s)` : ""}.`,
-      });
-    } catch (syncErr: any) {
-      return json({ ok: false, message: `Sync failed: ${syncErr.message}` });
-    }
+    const { runSync } = await import("../services/sync-engine.server");
+    const result = await runSync(session.shop, admin);
+    return json({
+      ok: true,
+      message: `Sync complete — ${result.synced} item(s) updated${result.errors.length > 0 ? `, ${result.errors.length} error(s)` : ""}.`,
+    });
+  } catch (syncErr: any) {
+    return json({ ok: false, message: `Sync failed: ${syncErr.message}` });
   }
 };
 
