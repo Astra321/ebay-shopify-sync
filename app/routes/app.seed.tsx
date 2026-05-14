@@ -5,8 +5,6 @@ import { Page, Layout, Card, BlockStack, Text, Button, Banner, Divider, List } f
 import { authenticate } from "../shopify.server";
 import { db } from "../db.server";
 import { ShopifyAdminClient } from "../services/shopify-api.server";
-import { EbayClient } from "../services/ebay.server";
-import { decrypt } from "../services/crypto.server";
 
 const DEMO_PRODUCTS = [
   { title: "Wireless Bluetooth Headphones", price: "49.99", qty: 20, sku: "DEMO-BT-HDPH-001" },
@@ -31,79 +29,28 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   if (intent === "clear") {
     await db.skuMapping.deleteMany({ where: { shop } });
     await db.syncLog.deleteMany({ where: { shop } });
-    return json({ ok: true, message: "All mappings cleared." });
+    return json({ ok: true, message: "All mappings cleared.", created: [], errors: [] });
   }
 
-  // Seed Shopify products + SKU mappings
-  const cred = await db.ebayCredential.findUnique({ where: { shop } });
   const shopifyClient = new ShopifyAdminClient(session as any);
-  const locationId = await shopifyClient.getLocationId();
+  let locationId: string;
+  try {
+    locationId = await shopifyClient.getLocationId();
+  } catch (err: any) {
+    return json({ ok: false, message: `Could not connect to Shopify: ${err.message}`, created: [], errors: [] }, { status: 500 });
+  }
 
   const created: string[] = [];
   const errors: string[] = [];
 
-  // Try to pull real eBay inventory item quantities (if OAuth connected)
-  let ebayQtyMap: Record<string, number> = {};
-  if (cred?.accessToken || cred?.refreshToken) {
-    try {
-      const ebay = new EbayClient({
-        appId: decrypt(cred.appId),
-        certId: decrypt(cred.certId),
-        devId: decrypt(cred.devId),
-        authToken: cred.authToken ? decrypt(cred.authToken) : "",
-        sellerId: cred.sellerId,
-        accessToken: cred.accessToken ? decrypt(cred.accessToken) : undefined,
-        refreshToken: cred.refreshToken ? decrypt(cred.refreshToken) : undefined,
-        accessTokenExpiry: cred.accessTokenExpiry ?? undefined,
-      });
-
-      // Try to create eBay inventory items (no offer/listing needed)
-      for (const p of DEMO_PRODUCTS) {
-        try {
-          const token = await (ebay as any).ensureAccessToken();
-          await import("axios").then(({ default: axios }) =>
-            axios.put(
-              `https://api.ebay.com/sell/inventory/v1/inventory_item/${encodeURIComponent(p.sku)}`,
-              {
-                product: { title: p.title, description: `Demo product: ${p.title}` },
-                condition: "NEW",
-                availability: {
-                  shipToLocationAvailability: { quantity: p.qty },
-                },
-              },
-              {
-                headers: {
-                  Authorization: `Bearer ${token}`,
-                  "Content-Type": "application/json",
-                  "Accept-Language": "en-US",
-                  "Content-Language": "en-US",
-                },
-              }
-            )
-          );
-          ebayQtyMap[p.sku] = p.qty;
-        } catch {
-          // eBay inventory creation optional — continue with Shopify-only seed
-          ebayQtyMap[p.sku] = p.qty;
-        }
-      }
-    } catch {
-      DEMO_PRODUCTS.forEach((p) => { ebayQtyMap[p.sku] = p.qty; });
-    }
-  } else {
-    DEMO_PRODUCTS.forEach((p) => { ebayQtyMap[p.sku] = p.qty; });
-  }
-
   for (const p of DEMO_PRODUCTS) {
     try {
-      // Skip if SKU mapping already exists
       const existing = await db.skuMapping.findFirst({ where: { shop, ebayItemId: p.sku } });
       if (existing) {
         created.push(`${p.title} (already exists)`);
         continue;
       }
 
-      // Create Shopify product
       const product = await shopifyClient.createProduct({
         title: p.title,
         body_html: `<p>Demo product for eBay-Shopify sync testing.</p>`,
@@ -115,13 +62,11 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
       const variant = product.variants[0];
 
-      // Connect inventory to location and set quantity
       try {
-        await shopifyClient.connectInventoryToLocation(variant.inventoryItemId, locationId);
+        await shopifyClient.connectInventoryToLocation(variant.inventoryItemId, locationId!);
       } catch { /* already connected */ }
-      await shopifyClient.setInventoryLevel(locationId, variant.inventoryItemId, ebayQtyMap[p.sku] ?? p.qty);
+      await shopifyClient.setInventoryLevel(locationId!, variant.inventoryItemId, p.qty);
 
-      // Create SKU mapping
       await db.skuMapping.create({
         data: {
           shop,
@@ -140,20 +85,21 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     }
   }
 
-  // Seed a demo sync log
-  await db.syncLog.create({
-    data: {
-      shop,
-      status: "SUCCESS",
-      itemsSynced: created.length,
-      startedAt: new Date(Date.now() - 5 * 60 * 1000),
-      finishedAt: new Date(),
-    },
-  });
+  if (created.length > 0) {
+    await db.syncLog.create({
+      data: {
+        shop,
+        status: "SUCCESS",
+        itemsSynced: created.length,
+        startedAt: new Date(Date.now() - 60_000),
+        finishedAt: new Date(),
+      },
+    });
+  }
 
   return json({
     ok: errors.length === 0,
-    message: `Created ${created.length} product(s). ${errors.length > 0 ? `${errors.length} error(s).` : ""}`,
+    message: `Created ${created.length} product(s).${errors.length > 0 ? ` ${errors.length} failed.` : ""}`,
     created,
     errors,
   });
