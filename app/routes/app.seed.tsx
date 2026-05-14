@@ -12,11 +12,11 @@ import { EbayClient } from "../services/ebay.server";
 import { decrypt } from "../services/crypto.server";
 
 const DEMO_PRODUCTS = [
-  { title: "Wireless Bluetooth Headphones",  price: "49.99", shopifyQty: 20, ebayQty: 5,  sku: "DEMO-BT-HDPH-001", desc: "Wireless Bluetooth headphones with noise cancellation. 30h battery life." },
-  { title: "USB-C Fast Charging Cable 2m",    price: "12.99", shopifyQty: 50, ebayQty: 8,  sku: "DEMO-USB-CABLE-002", desc: "Durable braided USB-C cable, 100W PD, 2m length." },
-  { title: "Phone Stand Adjustable Desk Mount", price: "19.99", shopifyQty: 30, ebayQty: 3, sku: "DEMO-PHSTAND-003", desc: "Aluminum adjustable phone stand for desk use." },
-  { title: "Mechanical Keyboard Tenkeyless",  price: "89.99", shopifyQty: 10, ebayQty: 2,  sku: "DEMO-MECH-KB-004", desc: "TKL mechanical keyboard, hot-swappable, RGB backlit." },
-  { title: "LED Desk Lamp with USB Charging", price: "34.99", shopifyQty: 15, ebayQty: 4,  sku: "DEMO-LEDLAMP-005", desc: "LED desk lamp with USB-A charging port and dimmer." },
+  { title: "Wireless Bluetooth Headphones",  price: "49.99", shopifyQty: 20, ebayQty: 5,  sku: "DEMO-BT-HDPH-001", desc: "Wireless Bluetooth headphones with noise cancellation. 30h battery life.", image: "https://picsum.photos/seed/headphones/800/800" },
+  { title: "USB-C Fast Charging Cable 2m",    price: "12.99", shopifyQty: 50, ebayQty: 8,  sku: "DEMO-USB-CABLE-002", desc: "Durable braided USB-C cable, 100W PD, 2m length.", image: "https://picsum.photos/seed/usbcable/800/800" },
+  { title: "Phone Stand Adjustable Desk Mount", price: "19.99", shopifyQty: 30, ebayQty: 3, sku: "DEMO-PHSTAND-003", desc: "Aluminum adjustable phone stand for desk use.", image: "https://picsum.photos/seed/phonestand/800/800" },
+  { title: "Mechanical Keyboard Tenkeyless",  price: "89.99", shopifyQty: 10, ebayQty: 2,  sku: "DEMO-MECH-KB-004", desc: "TKL mechanical keyboard, hot-swappable, RGB backlit.", image: "https://picsum.photos/seed/keyboard/800/800" },
+  { title: "LED Desk Lamp with USB Charging", price: "34.99", shopifyQty: 15, ebayQty: 4,  sku: "DEMO-LEDLAMP-005", desc: "LED desk lamp with USB-A charging port and dimmer.", image: "https://picsum.photos/seed/lamp/800/800" },
 ];
 
 async function loadEbayClient(shop: string): Promise<EbayClient | null> {
@@ -143,6 +143,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
             title: demo.title,
             description: demo.desc,
             quantity: demo.ebayQty,
+            imageUrls: [demo.image],
           });
         }
         updated.push(`${demo.title} (Shopify: ${demo.shopifyQty}, eBay: ${demo.ebayQty})`);
@@ -203,6 +204,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
             title: p.title,
             description: p.desc,
             quantity: p.ebayQty,
+            imageUrls: [p.image],
           });
           ebayNote = ` (Shopify: ${p.shopifyQty}, eBay: ${p.ebayQty})`;
         } catch (ebayErr: any) {
