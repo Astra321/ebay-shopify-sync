@@ -70,6 +70,7 @@ const shopifyProxy = new Proxy({} as ReturnType<typeof shopifyApp>, {
 });
 
 export default shopifyProxy;
+export const getShopifyApi = () => getShopify().api;
 export const apiVersion = new Proxy(
   {},
   { get: () => getShopify().apiVersion }
