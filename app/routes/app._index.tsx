@@ -22,7 +22,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       const result = await runSync(session.shop, session as any);
       return json({ ok: true, message: `Sync complete — ${result.synced} item(s) updated.` });
     } catch (syncErr: any) {
-      return json({ ok: false, message: `Sync failed: ${syncErr.message}` }, { status: 500 });
+      return json({ ok: false, message: `Sync failed: ${syncErr.message}` });
     }
   }
 };

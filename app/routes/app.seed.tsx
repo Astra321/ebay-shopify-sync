@@ -37,7 +37,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   try {
     locationId = await shopifyClient.getLocationId();
   } catch (err: any) {
-    return json({ ok: false, message: `Could not connect to Shopify: ${err.message}`, created: [], errors: [] }, { status: 500 });
+    return json({ ok: false, message: `Could not connect to Shopify: ${err.message}`, created: [], errors: [] });
   }
 
   const created: string[] = [];
