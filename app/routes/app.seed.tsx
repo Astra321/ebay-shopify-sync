@@ -128,9 +128,20 @@ export default function SeedPage() {
             {result && (
               <Banner tone={result.ok ? "success" : "warning"} title={result.message}>
                 {result.created && result.created.length > 0 && (
-                  <List>
-                    {result.created.map((name) => <List.Item key={name}>{name}</List.Item>)}
-                  </List>
+                  <>
+                    <Text as="p" variant="bodyMd" fontWeight="semibold">Created:</Text>
+                    <List>
+                      {result.created.map((name) => <List.Item key={name}>{name}</List.Item>)}
+                    </List>
+                  </>
+                )}
+                {result.errors && result.errors.length > 0 && (
+                  <>
+                    <Text as="p" variant="bodyMd" fontWeight="semibold">Errors:</Text>
+                    <List>
+                      {result.errors.map((msg, i) => <List.Item key={i}>{msg}</List.Item>)}
+                    </List>
+                  </>
                 )}
               </Banner>
             )}

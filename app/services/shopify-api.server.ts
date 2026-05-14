@@ -67,7 +67,9 @@ export class ShopifyAdminClient {
     variants: Array<{ title: string; price: string; sku: string; inventory_management: string }>;
   }): Promise<ShopifyProduct> {
     const v = input.variants[0];
-    const data = await this.run<{
+
+    // Step 1: create the product (no variants — productCreate in 2025-07 does not accept them inline)
+    const createData = await this.run<{
       productCreate: {
         product: {
           id: string;
@@ -94,29 +96,59 @@ export class ShopifyAdminClient {
           descriptionHtml: input.body_html,
           vendor: input.vendor,
           productType: input.product_type,
-          variants: [
-            {
-              price: v.price,
-              sku: v.sku,
-              inventoryManagement: "SHOPIFY",
-            },
-          ],
         },
       },
     );
 
-    if (data.productCreate.userErrors.length > 0) {
-      throw new Error(`productCreate failed: ${data.productCreate.userErrors.map((e) => e.message).join(", ")}`);
+    if (createData.productCreate.userErrors.length > 0) {
+      throw new Error(`productCreate: ${createData.productCreate.userErrors.map((e) => e.message).join(", ")}`);
     }
-    const p = data.productCreate.product!;
-    const variants: ShopifyVariant[] = p.variants.edges.map((e) => ({
-      id: fromGid(e.node.id),
-      inventoryItemId: fromGid(e.node.inventoryItem.id),
-      sku: e.node.sku ?? "",
-      price: String(e.node.price),
-      title: e.node.title,
-    }));
-    return { id: fromGid(p.id), variants };
+    const product = createData.productCreate.product!;
+    const defaultVariant = product.variants.edges[0]?.node;
+    if (!defaultVariant) {
+      throw new Error("productCreate returned no default variant");
+    }
+
+    // Step 2: update the auto-created default variant with price + SKU
+    const updateData = await this.run<{
+      productVariantsBulkUpdate: {
+        productVariants: Array<{ id: string; sku: string; price: string; title: string; inventoryItem: { id: string } }> | null;
+        userErrors: Array<{ field: string[]; message: string }>;
+      };
+    }>(
+      `#graphql
+        mutation variantUpdate($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
+          productVariantsBulkUpdate(productId: $productId, variants: $variants) {
+            productVariants { id sku price title inventoryItem { id } }
+            userErrors { field message }
+          }
+        }`,
+      {
+        productId: product.id,
+        variants: [
+          {
+            id: defaultVariant.id,
+            price: v.price,
+            inventoryItem: { sku: v.sku, tracked: true },
+          },
+        ],
+      },
+    );
+
+    if (updateData.productVariantsBulkUpdate.userErrors.length > 0) {
+      throw new Error(`variantUpdate: ${updateData.productVariantsBulkUpdate.userErrors.map((e) => e.message).join(", ")}`);
+    }
+    const updated = updateData.productVariantsBulkUpdate.productVariants?.[0] ?? defaultVariant;
+    const variants: ShopifyVariant[] = [
+      {
+        id: fromGid(updated.id),
+        inventoryItemId: fromGid(updated.inventoryItem.id),
+        sku: updated.sku ?? "",
+        price: String(updated.price),
+        title: updated.title,
+      },
+    ];
+    return { id: fromGid(product.id), variants };
   }
 
   async getInventoryLevels(inventoryItemIds: string[]): Promise<Record<string, number>> {
