@@ -12,34 +12,41 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
   const shop = session.shop;
 
-  const [totalMapped, lastLog, recentErrors, cred] = await Promise.all([
-    db.skuMapping.count({ where: { shop, isActive: true } }),
-    db.syncLog.findFirst({
-      where: { shop },
-      orderBy: { startedAt: "desc" },
-    }),
-    db.syncError.findMany({
-      where: { syncLog: { shop } },
-      orderBy: { createdAt: "desc" },
-      take: 5,
-    }),
-    db.ebayCredential.findUnique({ where: { shop } }),
-  ]);
+  try {
+    const [totalMapped, lastLog, errorCount, cred] = await Promise.all([
+      db.skuMapping.count({ where: { shop, isActive: true } }),
+      db.syncLog.findFirst({ where: { shop }, orderBy: { startedAt: "desc" } }),
+      db.syncError.count({ where: { syncLog: { shop } } }),
+      db.ebayCredential.findUnique({ where: { shop } }),
+    ]);
 
-  return json({
-    totalMapped,
-    lastLog: lastLog
-      ? {
-          status: lastLog.status,
-          startedAt: lastLog.startedAt.toISOString(),
-          finishedAt: lastLog.finishedAt?.toISOString() ?? null,
-          itemsSynced: lastLog.itemsSynced,
-        }
-      : null,
-    errorCount: recentErrors.length,
-    hasCreds: !!cred?.sellerId,
-    hasOAuth: !!(cred?.refreshToken),
-  });
+    return json({
+      totalMapped,
+      lastLog: lastLog
+        ? {
+            status: lastLog.status,
+            startedAt: lastLog.startedAt.toISOString(),
+            finishedAt: lastLog.finishedAt?.toISOString() ?? null,
+            itemsSynced: lastLog.itemsSynced,
+          }
+        : null,
+      errorCount,
+      hasCreds: !!cred?.sellerId,
+      hasOAuth: !!(cred?.refreshToken),
+      dbError: null,
+    });
+  } catch (err: any) {
+    // DB unavailable — still render the page without stats
+    console.error("[dashboard] DB error:", err.message);
+    return json({
+      totalMapped: 0,
+      lastLog: null,
+      errorCount: 0,
+      hasCreds: false,
+      hasOAuth: false,
+      dbError: "Database temporarily unavailable. Stats will appear once the connection is restored.",
+    });
+  }
 };
 
 export default function AppIndex() {
