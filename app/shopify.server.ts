@@ -46,12 +46,21 @@ function getShopify() {
       },
       hooks: {
         afterAuth: async ({ session }) => {
-          shopify.registerWebhooks({ session });
-          const { triggerImmediateSync, schedulePeriodicSync } = await import(
-            "./queue.server"
-          );
-          await schedulePeriodicSync(session.shop);
-          await triggerImmediateSync(session.shop);
+          try {
+            await _shopify!.registerWebhooks({ session });
+          } catch (err: any) {
+            console.error("[afterAuth] registerWebhooks failed:", err.message);
+          }
+          // Queue is optional — skip if Redis isn't configured/available
+          try {
+            const { triggerImmediateSync, schedulePeriodicSync } = await import(
+              "./queue.server"
+            );
+            await schedulePeriodicSync(session.shop);
+            await triggerImmediateSync(session.shop);
+          } catch (err: any) {
+            console.error("[afterAuth] queue setup skipped:", err.message);
+          }
         },
       },
     });
