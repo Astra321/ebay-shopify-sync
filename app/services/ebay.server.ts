@@ -142,6 +142,84 @@ export class EbayClient {
   }
 
   /**
+   * Create or replace an eBay inventory item (full upsert via PUT).
+   * Used for seeding test data. The PUT endpoint replaces the entire item,
+   * so all required fields must be supplied.
+   */
+  async createOrReplaceInventoryItem(
+    sku: string,
+    item: {
+      title: string;
+      description: string;
+      quantity: number;
+      imageUrls?: string[];
+      condition?: string;
+      brand?: string;
+    },
+  ): Promise<void> {
+    const token = await this.ensureAccessToken();
+
+    await axios.put(
+      `${EBAY_REST_BASE}/sell/inventory/v1/inventory_item/${encodeURIComponent(sku)}`,
+      {
+        availability: {
+          shipToLocationAvailability: { quantity: Math.max(0, item.quantity) },
+        },
+        condition: item.condition ?? "NEW",
+        product: {
+          title: item.title,
+          description: item.description,
+          imageUrls: item.imageUrls ?? [],
+          aspects: item.brand ? { Brand: [item.brand] } : undefined,
+        },
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+          "Content-Language": "en-US",
+          Accept: "application/json",
+        },
+      },
+    );
+  }
+
+  /**
+   * Get raw inventory item info (used by status/test endpoints).
+   */
+  async getInventoryItem(sku: string): Promise<{ quantity: number; title: string } | null> {
+    const token = await this.ensureAccessToken();
+    try {
+      const { data } = await axios.get(
+        `${EBAY_REST_BASE}/sell/inventory/v1/inventory_item/${encodeURIComponent(sku)}`,
+        { headers: { Authorization: `Bearer ${token}`, Accept: "application/json" } },
+      );
+      return {
+        quantity: data?.availability?.shipToLocationAvailability?.quantity ?? 0,
+        title: data?.product?.title ?? "",
+      };
+    } catch (err: any) {
+      if (err?.response?.status === 404) return null;
+      throw err;
+    }
+  }
+
+  /**
+   * Delete an eBay inventory item (used for cleanup in tests).
+   */
+  async deleteInventoryItem(sku: string): Promise<void> {
+    const token = await this.ensureAccessToken();
+    try {
+      await axios.delete(
+        `${EBAY_REST_BASE}/sell/inventory/v1/inventory_item/${encodeURIComponent(sku)}`,
+        { headers: { Authorization: `Bearer ${token}` } },
+      );
+    } catch (err: any) {
+      if (err?.response?.status !== 404) throw err;
+    }
+  }
+
+  /**
    * Update quantity via eBay Inventory API (OAuth 2.0).
    *
    * eBay requires quantity to be updated at BOTH the inventory item level
