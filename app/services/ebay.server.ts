@@ -143,26 +143,31 @@ export class EbayClient {
 
   /**
    * Update quantity via eBay Inventory API (OAuth 2.0).
+   * Uses bulkUpdatePriceQuantity which supports partial updates (quantity only)
+   * without requiring the full inventory_item payload.
    */
   async updateQuantityOAuth(sku: string, quantity: number): Promise<void> {
     const token = await this.ensureAccessToken();
 
-    // First get the current inventory item to find its offer IDs
-    await axios.put(
-      `${EBAY_REST_BASE}/sell/inventory/v1/inventory_item/${encodeURIComponent(sku)}`,
+    await axios.post(
+      `${EBAY_REST_BASE}/sell/inventory/v1/bulk_update_price_quantity`,
       {
-        availability: {
-          shipToLocationAvailability: {
-            quantity: Math.max(0, quantity),
+        requests: [
+          {
+            sku,
+            shipToLocationAvailability: {
+              quantity: Math.max(0, quantity),
+            },
           },
-        },
+        ],
       },
       {
         headers: {
           Authorization: `Bearer ${token}`,
           "Content-Type": "application/json",
+          "Content-Language": "en-US",
         },
-      }
+      },
     );
   }
 
