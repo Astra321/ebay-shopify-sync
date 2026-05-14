@@ -143,11 +143,38 @@ export class EbayClient {
 
   /**
    * Update quantity via eBay Inventory API (OAuth 2.0).
-   * Uses bulkUpdatePriceQuantity which supports partial updates (quantity only)
-   * without requiring the full inventory_item payload.
+   *
+   * eBay requires quantity to be updated at BOTH the inventory item level
+   * (shipToLocationAvailability) AND the offer level (availableQuantity).
+   * Without the offer-level update, the live listing quantity won't change.
+   *
+   * Strategy: fetch published offers for the SKU, then issue a single
+   * bulkUpdatePriceQuantity request covering both levels.
    */
   async updateQuantityOAuth(sku: string, quantity: number): Promise<void> {
     const token = await this.ensureAccessToken();
+    const qty = Math.max(0, quantity);
+
+    // Fetch offers for this SKU so we can update offer-level availableQuantity too
+    let offers: Array<{ offerId: string; status?: string }> = [];
+    try {
+      const { data } = await axios.get(
+        `${EBAY_REST_BASE}/sell/inventory/v1/offer`,
+        {
+          params: { sku },
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+          },
+        },
+      );
+      offers = data.offers ?? [];
+    } catch (err: any) {
+      // 404 means no offers exist yet — inventory-level update only
+      if (err?.response?.status !== 404) throw err;
+    }
+
+    const publishedOffers = offers.filter((o) => o.status === "PUBLISHED");
 
     await axios.post(
       `${EBAY_REST_BASE}/sell/inventory/v1/bulk_update_price_quantity`,
@@ -155,9 +182,15 @@ export class EbayClient {
         requests: [
           {
             sku,
-            shipToLocationAvailability: {
-              quantity: Math.max(0, quantity),
-            },
+            shipToLocationAvailability: { quantity: qty },
+            ...(publishedOffers.length > 0
+              ? {
+                  offers: publishedOffers.map((o) => ({
+                    offerId: o.offerId,
+                    availableQuantity: qty,
+                  })),
+                }
+              : {}),
           },
         ],
       },
