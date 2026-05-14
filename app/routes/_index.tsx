@@ -1,5 +1,15 @@
+import { redirect } from "@remix-run/node";
+import type { LoaderFunctionArgs, MetaFunction } from "@remix-run/node";
 import { Link } from "@remix-run/react";
-import type { MetaFunction } from "@remix-run/node";
+
+export const loader = ({ request }: LoaderFunctionArgs) => {
+  const url = new URL(request.url);
+  // When opened from Shopify admin the URL will have a `shop` param — go into the app
+  if (url.searchParams.has("shop")) {
+    return redirect(`/app?${url.searchParams.toString()}`);
+  }
+  return null;
+};
 
 export const meta: MetaFunction = () => {
   return [
