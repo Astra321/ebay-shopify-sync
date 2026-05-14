@@ -1,12 +1,31 @@
 import { json } from "@remix-run/node";
-import type { LoaderFunctionArgs } from "@remix-run/node";
-import { useLoaderData, useNavigate } from "@remix-run/react";
+import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
+import { useLoaderData, useNavigate, useFetcher } from "@remix-run/react";
 import {
   Page, Layout, Card, BlockStack, Text, Button, Banner,
   Badge, InlineStack, Divider,
 } from "@shopify/polaris";
 import { authenticate } from "../shopify.server";
 import { db } from "../db.server";
+
+export const action = async ({ request }: ActionFunctionArgs) => {
+  const { session } = await authenticate.admin(request);
+  try {
+    const { triggerImmediateSync } = await import("../queue.server");
+    await triggerImmediateSync(session.shop);
+    return json({ ok: true, message: "Sync queued successfully." });
+  } catch (err: any) {
+    // Queue (Redis) may not be running — fall back to direct sync
+    try {
+      const { runSync } = await import("../services/sync-engine.server");
+      const { Session } = await import("@shopify/shopify-api");
+      const result = await runSync(session.shop, session as any);
+      return json({ ok: true, message: `Sync complete — ${result.synced} item(s) updated.` });
+    } catch (syncErr: any) {
+      return json({ ok: false, message: `Sync failed: ${syncErr.message}` }, { status: 500 });
+    }
+  }
+};
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
@@ -53,6 +72,9 @@ export default function AppIndex() {
   const { totalMapped, lastLog, errorCount, hasCreds, hasOAuth } =
     useLoaderData<typeof loader>();
   const navigate = useNavigate();
+  const syncFetcher = useFetcher<typeof action>();
+  const isSyncing = syncFetcher.state !== "idle";
+  const syncResult = syncFetcher.data;
 
   const syncStatusTone = !lastLog
     ? "info"
@@ -136,12 +158,15 @@ export default function AppIndex() {
                   Trigger an immediate inventory sync between eBay and Shopify.
                   The lowest-stock-wins rule is applied — if quantities differ, the lower value is used on both platforms.
                 </Text>
+                {syncResult && (
+                  <Banner tone={syncResult.ok ? "success" : "critical"} title={syncResult.message} />
+                )}
                 <Divider />
-                <form method="post" action="/api/sync">
-                  <Button variant="primary" submit disabled={!hasOAuth}>
-                    Run Sync Now
+                <syncFetcher.Form method="post">
+                  <Button variant="primary" submit disabled={!hasOAuth || isSyncing} loading={isSyncing}>
+                    {isSyncing ? "Syncing…" : "Run Sync Now"}
                   </Button>
-                </form>
+                </syncFetcher.Form>
               </BlockStack>
             </Card>
 
