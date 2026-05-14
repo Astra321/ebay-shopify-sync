@@ -2,7 +2,8 @@ import { db } from "../db.server";
 import { EbayClient } from "./ebay.server";
 import { ShopifyAdminClient } from "./shopify-api.server";
 import { decrypt } from "./crypto.server";
-import { computeSyncActions, SyncItem, SyncAction } from "./compute-sync-actions.server";
+import { computeSyncActions } from "./compute-sync-actions.server";
+import type { SyncItem, SyncAction } from "./compute-sync-actions.server";
 import type { Session } from "@shopify/shopify-api";
 
 export { computeSyncActions, SyncItem, SyncAction };
