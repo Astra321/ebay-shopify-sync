@@ -79,7 +79,7 @@ export class EbayClient {
       new URLSearchParams({
         grant_type: "refresh_token",
         refresh_token: this.creds.refreshToken,
-        scope: "https://api.ebay.com/oauth/api_scope/sell.inventory https://api.ebay.com/oauth/api_scope/sell.inventory.readonly",
+        scope: EBAY_OAUTH_SCOPES.join(" "),
       }).toString(),
       {
         headers: {
@@ -94,6 +94,51 @@ export class EbayClient {
 
     // Persist the refreshed token to DB (shop is needed for this — caller must handle if desired)
     return this.creds.accessToken;
+  }
+
+  // ─── Seller profile, orders, health-check ─────────────────────────
+
+  async getSellerProfile(): Promise<{ username: string; email?: string; userId?: string } | null> {
+    const token = await this.ensureAccessToken();
+    try {
+      const { data } = await axios.get(`${EBAY_REST_BASE}/commerce/identity/v1/user/`, {
+        headers: { Authorization: `Bearer ${token}`, Accept: "application/json" },
+      });
+      return { username: data?.username ?? "", email: data?.email, userId: data?.userId };
+    } catch {
+      return null;
+    }
+  }
+
+  async getRecentOrders(limit = 10): Promise<Array<{
+    orderId: string; creationDate: string; buyer: string;
+    total: string; currency: string; status: string;
+    items: Array<{ title: string; sku: string; quantity: number }>;
+  }>> {
+    const token = await this.ensureAccessToken();
+    try {
+      const { data } = await axios.get(`${EBAY_REST_BASE}/sell/fulfillment/v1/order`, {
+        params: { limit, offset: 0 },
+        headers: { Authorization: `Bearer ${token}`, Accept: "application/json" },
+      });
+      return (data?.orders ?? []).map((o: any) => ({
+        orderId: o.orderId,
+        creationDate: o.creationDate,
+        buyer: o.buyer?.username ?? "—",
+        total: o.pricingSummary?.total?.value ?? "0.00",
+        currency: o.pricingSummary?.total?.currency ?? "USD",
+        status: o.orderFulfillmentStatus ?? o.orderPaymentStatus ?? "—",
+        items: (o.lineItems ?? []).map((li: any) => ({
+          title: li.title ?? "", sku: li.sku ?? "", quantity: Number(li.quantity ?? 0),
+        })),
+      }));
+    } catch {
+      return [];
+    }
+  }
+
+  async ping(): Promise<boolean> {
+    try { await this.ensureAccessToken(); return true; } catch { return false; }
   }
 
   // ─── OAuth 2.0 REST API methods (preferred) ───────────────────────
@@ -394,20 +439,25 @@ export class EbayClient {
  * After consent, eBay redirects back with an authorization code that
  * can be exchanged for access/refresh tokens via `exchangeEbayAuthCode()`.
  */
+export const EBAY_OAUTH_SCOPES = [
+  "https://api.ebay.com/oauth/api_scope/sell.inventory",
+  "https://api.ebay.com/oauth/api_scope/sell.inventory.readonly",
+  "https://api.ebay.com/oauth/api_scope/sell.account",
+  "https://api.ebay.com/oauth/api_scope/sell.account.readonly",
+  "https://api.ebay.com/oauth/api_scope/sell.fulfillment",
+  "https://api.ebay.com/oauth/api_scope/sell.fulfillment.readonly",
+  "https://api.ebay.com/oauth/api_scope/sell.analytics.readonly",
+  "https://api.ebay.com/oauth/api_scope/commerce.identity.readonly",
+];
+
 export function getEbayAuthUrl(appId: string, redirectUri: string, state: string): string {
   const params = new URLSearchParams({
     client_id: appId,
     response_type: "code",
     redirect_uri: redirectUri,
-    scope: [
-      "https://api.ebay.com/oauth/api_scope/sell.inventory",
-      "https://api.ebay.com/oauth/api_scope/sell.inventory.readonly",
-      "https://api.ebay.com/oauth/api_scope/sell.account",
-      "https://api.ebay.com/oauth/api_scope/sell.account.readonly",
-    ].join(" "),
+    scope: EBAY_OAUTH_SCOPES.join(" "),
     state,
   });
-
   return `https://auth.ebay.com/oauth2/authorize?${params.toString()}`;
 }
 

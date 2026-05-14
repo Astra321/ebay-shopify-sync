@@ -1,9 +1,10 @@
 import { json } from "@remix-run/node";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
 import { useLoaderData, useNavigate, useFetcher } from "@remix-run/react";
+import { useEffect } from "react";
 import {
   Page, Layout, Card, BlockStack, Text, Button, Banner,
-  Badge, InlineStack, Divider, IndexTable, EmptyState, Icon,
+  Badge, InlineStack, Divider, ProgressBar,
 } from "@shopify/polaris";
 import { authenticate } from "../shopify.server";
 import { db } from "../db.server";
@@ -13,8 +14,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   try {
     const { triggerImmediateSync } = await import("../queue.server");
     await triggerImmediateSync(session.shop);
-    return json({ ok: true, message: "Sync queued successfully." });
-  } catch (err: any) {
+    return json({ ok: true, message: "Sync queued. Watching progress…" });
+  } catch {
     try {
       const { runSync } = await import("../services/sync-engine.server");
       const result = await runSync(session.shop, admin);
@@ -31,7 +32,6 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
   const shop = session.shop;
-
   try {
     const [totalMapped, totalInactive, lastLog, errorCount, recentLogs, cred] = await Promise.all([
       db.skuMapping.count({ where: { shop, isActive: true } }),
@@ -39,29 +39,22 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       db.syncLog.findFirst({ where: { shop }, orderBy: { startedAt: "desc" } }),
       db.syncError.count({ where: { syncLog: { shop } } }),
       db.syncLog.findMany({
-        where: { shop },
-        orderBy: { startedAt: "desc" },
-        take: 5,
+        where: { shop }, orderBy: { startedAt: "desc" }, take: 5,
         select: { id: true, status: true, startedAt: true, finishedAt: true, itemsSynced: true },
       }),
       db.ebayCredential.findUnique({ where: { shop } }),
     ]);
-
     return json({
-      totalMapped,
-      totalInactive,
-      lastLog: lastLog
-        ? {
-            status: lastLog.status,
-            startedAt: lastLog.startedAt.toISOString(),
-            finishedAt: lastLog.finishedAt?.toISOString() ?? null,
-            itemsSynced: lastLog.itemsSynced,
-          }
-        : null,
+      totalMapped, totalInactive,
+      lastLog: lastLog ? {
+        status: lastLog.status,
+        startedAt: lastLog.startedAt.toISOString(),
+        finishedAt: lastLog.finishedAt?.toISOString() ?? null,
+        itemsSynced: lastLog.itemsSynced,
+      } : null,
       errorCount,
       recentLogs: recentLogs.map((l) => ({
-        id: l.id,
-        status: l.status,
+        id: l.id, status: l.status,
         startedAt: l.startedAt.toISOString(),
         finishedAt: l.finishedAt?.toISOString() ?? null,
         itemsSynced: l.itemsSynced,
@@ -72,16 +65,9 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       dbError: null,
     });
   } catch (err: any) {
-    console.error("[dashboard] DB error:", err.message);
     return json({
-      totalMapped: 0,
-      totalInactive: 0,
-      lastLog: null,
-      errorCount: 0,
-      recentLogs: [],
-      hasCreds: false,
-      hasOAuth: false,
-      sellerId: null,
+      totalMapped: 0, totalInactive: 0, lastLog: null, errorCount: 0,
+      recentLogs: [], hasCreds: false, hasOAuth: false, sellerId: null,
       dbError: "Database temporarily unavailable. Stats will appear once the connection is restored.",
     });
   }
@@ -91,6 +77,7 @@ function statusTone(status: string): "success" | "warning" | "critical" | "info"
   if (status === "SUCCESS") return "success";
   if (status === "PARTIAL") return "warning";
   if (status === "FAILED") return "critical";
+  if (status === "RUNNING") return "info";
   return "info";
 }
 
@@ -105,19 +92,45 @@ function timeAgo(iso: string): string {
   return `${d}d ago`;
 }
 
+type StatusData = {
+  log: null | {
+    id: string; status: string; itemsSynced: number;
+    startedAt: string; finishedAt: string | null; errorCount: number;
+  };
+  totalMappings: number;
+};
+
 export default function AppIndex() {
   const {
     totalMapped, totalInactive, lastLog, errorCount, recentLogs,
     hasCreds, hasOAuth, sellerId, dbError,
   } = useLoaderData<typeof loader>();
   const navigate = useNavigate();
-  const syncFetcher = useFetcher<typeof action>();
-  const isSyncing = syncFetcher.state !== "idle";
-  const syncResult = syncFetcher.data;
 
-  const lastSyncLabel = !lastLog
-    ? "Never synced"
-    : `${lastLog.itemsSynced} items · ${timeAgo(lastLog.startedAt)}`;
+  const syncFetcher = useFetcher<typeof action>();
+  const statusFetcher = useFetcher<StatusData>();
+  const isSyncing = syncFetcher.state !== "idle";
+
+  // Poll /app/sync-status while a sync is running OR for 4s after completion
+  // (so the UI catches the final SUCCESS/PARTIAL/FAILED state)
+  useEffect(() => {
+    if (!isSyncing) return;
+    statusFetcher.load("/app/sync-status");
+    const interval = setInterval(() => {
+      statusFetcher.load("/app/sync-status");
+    }, 800);
+    return () => clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isSyncing]);
+
+  const live = statusFetcher.data;
+  const liveLog = live?.log;
+  const liveTotal = live?.totalMappings ?? totalMapped;
+  const progress = liveLog && liveTotal > 0
+    ? Math.min(100, Math.round((liveLog.itemsSynced / liveTotal) * 100))
+    : 0;
+
+  const lastSyncLabel = !lastLog ? "Never synced" : `${lastLog.itemsSynced} items · ${timeAgo(lastLog.startedAt)}`;
 
   return (
     <Page
@@ -125,18 +138,17 @@ export default function AppIndex() {
       subtitle="Inventory bridge dashboard"
       primaryAction={{
         content: isSyncing ? "Syncing…" : "Run Sync Now",
-        onAction: () => {
-          const form = new FormData();
-          syncFetcher.submit(form, { method: "post" });
-        },
+        onAction: () => syncFetcher.submit(new FormData(), { method: "post" }),
         loading: isSyncing,
         disabled: !hasOAuth || isSyncing,
       }}
       secondaryActions={[
-        { content: "Settings", onAction: () => navigate("/app/settings") },
+        { content: "Preview", onAction: () => navigate("/app/preview"), disabled: !hasOAuth },
+        { content: "eBay orders", onAction: () => navigate("/app/orders"), disabled: !hasOAuth },
         { content: "Mappings", onAction: () => navigate("/app/mappings") },
         { content: "Errors", onAction: () => navigate("/app/errors") },
-        { content: "Seed Demo", onAction: () => navigate("/app/seed") },
+        { content: "Settings", onAction: () => navigate("/app/settings") },
+        { content: "Seed demo", onAction: () => navigate("/app/seed") },
       ]}
     >
       <Layout>
@@ -173,15 +185,32 @@ export default function AppIndex() {
               </Banner>
             )}
 
-            {syncResult && (
-              <Banner
-                tone={syncResult.ok ? "success" : "critical"}
-                title={syncResult.message}
-                onDismiss={() => { /* fetcher data clears on next submit */ }}
-              />
+            {/* Live progress card — appears while syncing */}
+            {(isSyncing || liveLog?.status === "RUNNING") && (
+              <Card>
+                <BlockStack gap="300">
+                  <InlineStack align="space-between" blockAlign="center">
+                    <InlineStack gap="200" blockAlign="center">
+                      <Badge tone="info">RUNNING</Badge>
+                      <Text as="h3" variant="headingMd">Sync in progress</Text>
+                    </InlineStack>
+                    <Text as="p" variant="bodySm" tone="subdued">
+                      {liveLog?.itemsSynced ?? 0} / {liveTotal} items
+                    </Text>
+                  </InlineStack>
+                  <ProgressBar progress={progress} tone="primary" />
+                  <Text as="p" variant="bodySm" tone="subdued">
+                    Applying lowest-stock-wins to each mapped SKU. This page will update automatically.
+                  </Text>
+                </BlockStack>
+              </Card>
             )}
 
-            {/* Top-level stats grid */}
+            {syncFetcher.data && !isSyncing && (
+              <Banner tone={syncFetcher.data.ok ? "success" : "critical"} title={syncFetcher.data.message} />
+            )}
+
+            {/* Stats grid */}
             <Layout>
               <Layout.Section variant="oneThird">
                 <Card>
@@ -195,7 +224,6 @@ export default function AppIndex() {
                   </BlockStack>
                 </Card>
               </Layout.Section>
-
               <Layout.Section variant="oneThird">
                 <Card>
                   <BlockStack gap="200">
@@ -210,21 +238,19 @@ export default function AppIndex() {
                   </BlockStack>
                 </Card>
               </Layout.Section>
-
               <Layout.Section variant="oneThird">
                 <Card>
                   <BlockStack gap="200">
                     <Text as="p" variant="bodySm" tone="subdued">Last sync</Text>
-                    <InlineStack gap="200" blockAlign="center">
-                      <Badge tone={statusTone(lastLog?.status ?? "")}>
-                        {lastLog?.status ?? "None"}
-                      </Badge>
-                    </InlineStack>
+                    <Badge tone={statusTone(lastLog?.status ?? "")}>
+                      {lastLog?.status ?? "None"}
+                    </Badge>
                     <Text as="p" variant="bodySm" tone="subdued">{lastSyncLabel}</Text>
-                    <Button variant="plain" disabled={!hasOAuth || isSyncing} onClick={() => {
-                      const form = new FormData();
-                      syncFetcher.submit(form, { method: "post" });
-                    }}>
+                    <Button
+                      variant="plain"
+                      disabled={!hasOAuth || isSyncing}
+                      onClick={() => syncFetcher.submit(new FormData(), { method: "post" })}
+                    >
                       {isSyncing ? "Syncing…" : "Sync again →"}
                     </Button>
                   </BlockStack>
@@ -232,7 +258,41 @@ export default function AppIndex() {
               </Layout.Section>
             </Layout>
 
-            {/* Connection status */}
+            {/* Quick actions grid */}
+            <Card>
+              <BlockStack gap="400">
+                <Text as="h2" variant="headingMd">Power tools</Text>
+                <Divider />
+                <Layout>
+                  <Layout.Section variant="oneHalf">
+                    <BlockStack gap="200">
+                      <Text as="p" variant="bodyMd" fontWeight="semibold">Preview before applying</Text>
+                      <Text as="p" variant="bodySm" tone="subdued">
+                        See per-SKU current quantities and exactly what each side would be set to.
+                        Apply changes from inside the preview.
+                      </Text>
+                      <Button onClick={() => navigate("/app/preview")} disabled={!hasOAuth}>
+                        Open sync preview →
+                      </Button>
+                    </BlockStack>
+                  </Layout.Section>
+                  <Layout.Section variant="oneHalf">
+                    <BlockStack gap="200">
+                      <Text as="p" variant="bodyMd" fontWeight="semibold">Live eBay activity</Text>
+                      <Text as="p" variant="bodySm" tone="subdued">
+                        Pulls seller profile and recent orders directly from eBay using the
+                        fulfillment and identity scopes.
+                      </Text>
+                      <Button onClick={() => navigate("/app/orders")} disabled={!hasOAuth}>
+                        View orders & seller →
+                      </Button>
+                    </BlockStack>
+                  </Layout.Section>
+                </Layout>
+              </BlockStack>
+            </Card>
+
+            {/* Connections */}
             <Card>
               <BlockStack gap="400">
                 <Text as="h2" variant="headingMd">Connections</Text>
@@ -244,19 +304,11 @@ export default function AppIndex() {
                   </BlockStack>
                   <BlockStack gap="100">
                     <Text as="p" variant="bodySm" tone="subdued">eBay account</Text>
-                    {hasCreds ? (
-                      <Badge tone="success">{sellerId}</Badge>
-                    ) : (
-                      <Badge tone="warning">Not set</Badge>
-                    )}
+                    {hasCreds ? <Badge tone="success">{sellerId}</Badge> : <Badge tone="warning">Not set</Badge>}
                   </BlockStack>
                   <BlockStack gap="100">
                     <Text as="p" variant="bodySm" tone="subdued">eBay OAuth</Text>
-                    {hasOAuth ? (
-                      <Badge tone="success">Authorized</Badge>
-                    ) : (
-                      <Badge tone="warning">Not authorized</Badge>
-                    )}
+                    {hasOAuth ? <Badge tone="success">Authorized</Badge> : <Badge tone="warning">Not authorized</Badge>}
                   </BlockStack>
                 </InlineStack>
               </BlockStack>
@@ -271,11 +323,9 @@ export default function AppIndex() {
                 </InlineStack>
                 <Divider />
                 {recentLogs.length === 0 ? (
-                  <BlockStack gap="200" align="center">
-                    <Text as="p" variant="bodyMd" tone="subdued">
-                      No sync history yet. Click "Run Sync Now" to trigger the first sync.
-                    </Text>
-                  </BlockStack>
+                  <Text as="p" variant="bodyMd" tone="subdued">
+                    No sync history yet. Click "Run Sync Now" to trigger the first sync.
+                  </Text>
                 ) : (
                   <BlockStack gap="200">
                     {recentLogs.map((log) => {
@@ -296,23 +346,6 @@ export default function AppIndex() {
                     })}
                   </BlockStack>
                 )}
-              </BlockStack>
-            </Card>
-
-            {/* How it works */}
-            <Card>
-              <BlockStack gap="300">
-                <Text as="h2" variant="headingMd">How sync works</Text>
-                <Divider />
-                <Text as="p" variant="bodyMd" tone="subdued">
-                  When inventory differs between eBay and Shopify, the <b>lower quantity wins</b> on
-                  both platforms — this prevents overselling. Syncs run automatically on a schedule
-                  (when the queue worker is enabled) and can be triggered manually from this dashboard.
-                </Text>
-                <Text as="p" variant="bodyMd" tone="subdued">
-                  Each mapping links one eBay SKU to one Shopify variant. Use <b>Seed Demo</b> to
-                  create test products and mappings, or visit <b>Mappings</b> to manage them.
-                </Text>
               </BlockStack>
             </Card>
 
