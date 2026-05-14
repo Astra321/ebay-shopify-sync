@@ -1,9 +1,13 @@
 import type { LoaderFunctionArgs } from "@remix-run/node";
-import { authenticate } from "../shopify.server";
+import { login } from "../shopify.server";
 
-// Catch-all for /auth/login and /auth/callback — delegates entirely to the
-// Shopify App Remix library which handles the OAuth flow automatically.
 export const loader = async ({ request }: LoaderFunctionArgs) => {
+  const url = new URL(request.url);
+  if (url.pathname === "/auth/login") {
+    return login(request);
+  }
+  // /auth/callback and anything else — handled by the Shopify library via authenticate
+  const { authenticate } = await import("../shopify.server");
   await authenticate.admin(request);
   return null;
 };
