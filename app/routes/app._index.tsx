@@ -9,7 +9,7 @@ import { authenticate } from "../shopify.server";
 import { db } from "../db.server";
 
 export const action = async ({ request }: ActionFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
+  const { session, admin } = await authenticate.admin(request);
   try {
     const { triggerImmediateSync } = await import("../queue.server");
     await triggerImmediateSync(session.shop);
@@ -18,8 +18,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     // Queue (Redis) may not be running — fall back to direct sync
     try {
       const { runSync } = await import("../services/sync-engine.server");
-      const { Session } = await import("@shopify/shopify-api");
-      const result = await runSync(session.shop, session as any);
+      const result = await runSync(session.shop, admin);
       return json({ ok: true, message: `Sync complete — ${result.synced} item(s) updated.` });
     } catch (syncErr: any) {
       return json({ ok: false, message: `Sync failed: ${syncErr.message}` });

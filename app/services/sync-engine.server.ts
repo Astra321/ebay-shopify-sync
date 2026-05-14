@@ -4,9 +4,9 @@ import { ShopifyAdminClient } from "./shopify-api.server";
 import { decrypt } from "./crypto.server";
 import { computeSyncActions } from "./compute-sync-actions.server";
 import type { SyncItem, SyncAction } from "./compute-sync-actions.server";
-import type { Session } from "@shopify/shopify-api";
 
-export { computeSyncActions, SyncItem, SyncAction };
+export { computeSyncActions };
+export type { SyncItem, SyncAction };
 
 /**
  * Run the bidirectional inventory sync for a shop.
@@ -14,7 +14,7 @@ export { computeSyncActions, SyncItem, SyncAction };
  * eBay credentials are decrypted at runtime; OAuth access tokens are preferred
  * over legacy Auth'n'Auth tokens when available.
  */
-export async function runSync(shop: string, session: Session): Promise<{ synced: number; errors: Array<{ ebayItemId: string; message: string }> }> {
+export async function runSync(shop: string, admin: any): Promise<{ synced: number; errors: Array<{ ebayItemId: string; message: string }> }> {
   const cred = await db.ebayCredential.findUniqueOrThrow({ where: { shop } });
 
   // Build eBay client — prefer OAuth access token over legacy auth token
@@ -29,8 +29,8 @@ export async function runSync(shop: string, session: Session): Promise<{ synced:
     accessTokenExpiry: cred.accessTokenExpiry ?? undefined,
   });
 
-  // Shopify client uses the session's access token via SDK
-  const shopifyClient = new ShopifyAdminClient(session);
+  // Shopify client uses the authenticated admin REST client (handles auth + tokens internally)
+  const shopifyClient = new ShopifyAdminClient(admin);
 
   const mappings = await db.skuMapping.findMany({ where: { shop, isActive: true } });
   if (mappings.length === 0) return { synced: 0, errors: [] };

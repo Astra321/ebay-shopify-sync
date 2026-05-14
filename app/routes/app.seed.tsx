@@ -21,7 +21,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
+  const { session, admin } = await authenticate.admin(request);
   const shop = session.shop;
   const form = await request.formData();
   const intent = form.get("intent") as string;
@@ -32,7 +32,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     return json({ ok: true, message: "All mappings cleared.", created: [], errors: [] });
   }
 
-  const shopifyClient = new ShopifyAdminClient(session as any);
+  const shopifyClient = new ShopifyAdminClient(admin as any);
   let locationId: string;
   try {
     locationId = await shopifyClient.getLocationId();

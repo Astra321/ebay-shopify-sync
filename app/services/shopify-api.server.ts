@@ -1,7 +1,3 @@
-import type { Session } from "@shopify/shopify-api";
-
-const API_VERSION = "2025-07";
-
 export interface ShopifyProduct {
   id: string;
   variants: ShopifyVariant[];
@@ -15,30 +11,31 @@ export interface ShopifyVariant {
   title: string;
 }
 
-export class ShopifyAdminClient {
-  private baseUrl: string;
-  private accessToken: string;
+// Minimal shape of the admin.rest client returned by Shopify App Remix authenticate.admin()
+interface AdminRest {
+  get(args: { path: string; query?: Record<string, string | number> }): Promise<Response>;
+  post(args: { path: string; data?: unknown }): Promise<Response>;
+  put(args: { path: string; data?: unknown }): Promise<Response>;
+  delete(args: { path: string }): Promise<Response>;
+}
 
-  constructor(session: Session) {
-    this.baseUrl = `https://${session.shop}/admin/api/${API_VERSION}`;
-    this.accessToken = session.accessToken!;
+interface AdminClient {
+  rest: AdminRest;
+}
+
+export class ShopifyAdminClient {
+  private rest: AdminRest;
+
+  constructor(admin: AdminClient) {
+    this.rest = admin.rest;
   }
 
-  private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
-    const url = `${this.baseUrl}/${path}`;
-    const res = await fetch(url, {
-      method,
-      headers: {
-        "X-Shopify-Access-Token": this.accessToken,
-        "Content-Type": "application/json",
-      },
-      ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
-    });
+  private async readJson(res: Response, method: string, path: string): Promise<any> {
     if (!res.ok) {
       const text = await res.text();
       throw new Error(`Shopify API ${res.status} on ${method} ${path}: ${text}`);
     }
-    return res.json() as Promise<T>;
+    return res.json();
   }
 
   async createProduct(data: {
@@ -49,22 +46,24 @@ export class ShopifyAdminClient {
     images: Array<{ src: string }>;
     variants: Array<{ title: string; price: string; sku: string; inventory_management: string }>;
   }): Promise<ShopifyProduct> {
-    const body = await this.request<{ product: any }>("POST", "products.json", { product: data });
+    const res = await this.rest.post({ path: "products", data: { product: data } });
+    const body = await this.readJson(res, "POST", "products");
     return this.parseProduct(body.product);
   }
 
   async getLocationId(): Promise<string> {
-    const body = await this.request<{ locations: any[] }>("GET", "locations.json");
+    const res = await this.rest.get({ path: "locations" });
+    const body = await this.readJson(res, "GET", "locations");
     if (!body.locations?.length) throw new Error("No locations found in Shopify store");
     return String(body.locations[0].id);
   }
 
   async getInventoryLevels(inventoryItemIds: string[]): Promise<Record<string, number>> {
-    const ids = inventoryItemIds.join(",");
-    const body = await this.request<{ inventory_levels: any[] }>(
-      "GET",
-      `inventory_levels.json?inventory_item_ids=${encodeURIComponent(ids)}&limit=250`,
-    );
+    const res = await this.rest.get({
+      path: "inventory_levels",
+      query: { inventory_item_ids: inventoryItemIds.join(","), limit: 250 },
+    });
+    const body = await this.readJson(res, "GET", "inventory_levels");
     const result: Record<string, number> = {};
     for (const level of body.inventory_levels) {
       result[String(level.inventory_item_id)] = level.available ?? 0;
@@ -73,18 +72,23 @@ export class ShopifyAdminClient {
   }
 
   async setInventoryLevel(locationId: string, inventoryItemId: string, available: number): Promise<void> {
-    await this.request("POST", "inventory_levels/set.json", {
-      location_id: locationId,
-      inventory_item_id: inventoryItemId,
-      available: Math.max(0, available),
+    const res = await this.rest.post({
+      path: "inventory_levels/set",
+      data: {
+        location_id: locationId,
+        inventory_item_id: inventoryItemId,
+        available: Math.max(0, available),
+      },
     });
+    await this.readJson(res, "POST", "inventory_levels/set");
   }
 
   async connectInventoryToLocation(inventoryItemId: string, locationId: string): Promise<void> {
-    await this.request("POST", "inventory_levels/connect.json", {
-      location_id: locationId,
-      inventory_item_id: inventoryItemId,
+    const res = await this.rest.post({
+      path: "inventory_levels/connect",
+      data: { location_id: locationId, inventory_item_id: inventoryItemId },
     });
+    await this.readJson(res, "POST", "inventory_levels/connect");
   }
 
   private parseProduct(p: any): ShopifyProduct {
