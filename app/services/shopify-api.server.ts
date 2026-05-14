@@ -1,4 +1,4 @@
-import shopify from "../shopify.server";
+import { getShopifyApi } from "../shopify.server";
 import type { Session } from "@shopify/shopify-api";
 
 export interface ShopifyProduct {
@@ -21,12 +21,12 @@ export interface ShopifyVariant {
  * and API versioning automatically.
  */
 export class ShopifyAdminClient {
-  private client: InstanceType<typeof shopify.api.clients.Rest>;
+  private client: InstanceType<ReturnType<typeof getShopifyApi>["clients"]["Rest"]>;
   private session: Session;
 
   constructor(session: Session) {
     this.session = session;
-    this.client = new shopify.api.clients.Rest({ session });
+    this.client = new (getShopifyApi().clients.Rest)({ session });
   }
 
   async createProduct(data: {
