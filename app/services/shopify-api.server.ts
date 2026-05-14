@@ -79,7 +79,7 @@ export class ShopifyAdminClient {
       };
     }>(
       `#graphql
-        mutation productCreate($input: ProductInput!) {
+        mutation productCreate($input: ProductCreateInput!) {
           productCreate(input: $input) {
             product {
               id
