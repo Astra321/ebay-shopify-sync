@@ -54,9 +54,19 @@ export function CredentialsForm({ saved, error, hasOAuth, oAuthUrl }: Props) {
             <Divider />
             <Text as="p" variant="bodyMd" tone="subdued">
               After saving your username, click below to authorize the app on eBay.
-              You'll be taken to eBay's sign-in page and redirected back automatically.
+              A new tab will open for eBay sign-in and close automatically when done.
             </Text>
-            <Button variant="primary" url={oAuthUrl} external>
+            <Button
+              variant="primary"
+              onClick={() => {
+                // Must escape Shopify's iframe — window.open targets the top frame
+                if (window.top) {
+                  window.top.location.href = oAuthUrl;
+                } else {
+                  window.open(oAuthUrl, "_blank");
+                }
+              }}
+            >
               Connect with eBay
             </Button>
           </BlockStack>
