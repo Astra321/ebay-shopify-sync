@@ -74,12 +74,16 @@ export class EbayClient {
     }
 
     const creds = Buffer.from(`${this.creds.appId}:${this.creds.certId}`).toString("base64");
+    // NOTE: We intentionally omit `scope` on refresh — a refresh token can only
+    // produce access tokens covering the scopes it was originally granted.
+    // Sending a wider scope list here causes eBay to return 400. If you add new
+    // scopes (like fulfillment / identity), the user must re-authorize to get
+    // a new refresh token covering those scopes.
     const { data } = await axios.post(
       EBAY_TOKEN_URL,
       new URLSearchParams({
         grant_type: "refresh_token",
         refresh_token: this.creds.refreshToken,
-        scope: EBAY_OAUTH_SCOPES.join(" "),
       }).toString(),
       {
         headers: {
@@ -117,8 +121,11 @@ export class EbayClient {
   }>> {
     const token = await this.ensureAccessToken();
     try {
+      // /sell/fulfillment/v1/order requires a filter param (creationdate range)
+      const since = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString();
+      const filter = `creationdate:[${since}..]`;
       const { data } = await axios.get(`${EBAY_REST_BASE}/sell/fulfillment/v1/order`, {
-        params: { limit, offset: 0 },
+        params: { limit, offset: 0, filter },
         headers: { Authorization: `Bearer ${token}`, Accept: "application/json" },
       });
       return (data?.orders ?? []).map((o: any) => ({

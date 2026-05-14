@@ -33,9 +33,17 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       ebay.getRecentOrders(20),
       ebay.getSellerProfile(),
     ]);
-    return json({ orders, seller, connected: true, error: null });
+    return json({ orders, seller, connected: true, error: null, needsReauth: false });
   } catch (err: any) {
-    return json({ orders: [], seller: null, connected: true, error: err.message });
+    const status = err?.response?.status;
+    const detail = err?.response?.data?.error_description ?? err?.response?.data?.errors?.[0]?.message ?? err.message;
+    // 401/403 typically means the existing refresh token was granted with a narrower scope set
+    const needsReauth = status === 401 || status === 403;
+    return json({
+      orders: [], seller: null, connected: true,
+      error: `${status ? status + ": " : ""}${detail}`,
+      needsReauth,
+    });
   }
 };
 
@@ -47,7 +55,7 @@ function fulfillmentTone(status: string): "success" | "warning" | "info" | "crit
 }
 
 export default function OrdersPage() {
-  const { orders, seller, connected, error } = useLoaderData<typeof loader>();
+  const { orders, seller, connected, error, needsReauth } = useLoaderData<typeof loader>();
 
   return (
     <Page
@@ -64,8 +72,16 @@ export default function OrdersPage() {
               </Banner>
             )}
             {error && (
-              <Banner tone="critical" title="Could not load from eBay">
-                <Text as="p" variant="bodyMd">{error}</Text>
+              <Banner
+                tone={needsReauth ? "warning" : "critical"}
+                title={needsReauth ? "Re-authorize eBay to enable new scopes" : "Could not load from eBay"}
+                action={needsReauth ? { content: "Open Settings", url: "/app/settings" } : undefined}
+              >
+                <Text as="p" variant="bodyMd">
+                  {needsReauth
+                    ? "Your existing eBay token was issued before fulfillment and identity scopes were added. Reconnect from Settings to grant the new permissions."
+                    : error}
+                </Text>
               </Banner>
             )}
 
