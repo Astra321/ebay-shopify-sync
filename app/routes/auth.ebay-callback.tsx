@@ -1,14 +1,8 @@
 import { LoaderFunctionArgs, json, redirect } from "@remix-run/node";
-import { authenticate } from "../shopify.server";
 import { db } from "../db.server";
 import { exchangeEbayAuthCode } from "../services/ebay.server";
 import { encrypt } from "../services/crypto.server";
 
-/**
- * eBay OAuth 2.0 callback route.
- * eBay redirects here after the user grants consent.
- * Exchanges the authorization code for access + refresh tokens.
- */
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const url = new URL(request.url);
   const code = url.searchParams.get("code");
@@ -18,32 +12,41 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     return json({ error: "Missing authorization code or state parameter" }, { status: 400 });
   }
 
-  const shop = state;
-  const cred = await db.ebayCredential.findUnique({ where: { shop } });
+  // App-level credentials always come from env vars
+  const appId = process.env.EBAY_APP_ID ?? "";
+  const certId = process.env.EBAY_CERT_ID ?? "";
+  const ruName = process.env.EBAY_RUNAME ?? "";
 
-  if (!cred || !cred.redirectUri) {
-    return json({ error: "No eBay credentials or redirect URI configured for this shop" }, { status: 400 });
+  if (!appId || !certId || !ruName) {
+    return json({ error: "App eBay credentials not configured" }, { status: 500 });
   }
 
+  const shop = state;
+
   try {
-    // Decrypt the App ID and Cert ID to exchange the auth code
-    const { decrypt } = await import("../services/crypto.server");
-    const appId = decrypt(cred.appId);
-    const certId = decrypt(cred.certId);
+    const tokens = await exchangeEbayAuthCode(appId, certId, code, ruName);
 
-    const tokens = await exchangeEbayAuthCode(appId, certId, code, cred.redirectUri);
-
-    // Store the encrypted tokens
-    await db.ebayCredential.update({
+    await db.ebayCredential.upsert({
       where: { shop },
-      data: {
+      create: {
+        shop,
+        appId: encrypt(appId),
+        certId: encrypt(certId),
+        devId: encrypt(process.env.EBAY_DEV_ID ?? ""),
+        authToken: "",
+        sellerId: "",
+        redirectUri: ruName,
+        accessToken: encrypt(tokens.accessToken),
+        refreshToken: encrypt(tokens.refreshToken),
+        accessTokenExpiry: new Date(Date.now() + (tokens.expiresIn - 60) * 1000),
+      },
+      update: {
         accessToken: encrypt(tokens.accessToken),
         refreshToken: encrypt(tokens.refreshToken),
         accessTokenExpiry: new Date(Date.now() + (tokens.expiresIn - 60) * 1000),
       },
     });
 
-    // Redirect back to the Shopify app settings page
     return redirect(`https://${shop}/admin/apps/${process.env.SHOPIFY_API_KEY}/app/settings?oauth=success`);
   } catch (err: any) {
     console.error("[ebay-oauth] Token exchange failed:", err.message);

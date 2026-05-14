@@ -1,46 +1,46 @@
 import { ActionFunctionArgs, LoaderFunctionArgs, json } from "@remix-run/node";
 import { useLoaderData, useActionData } from "@remix-run/react";
-import { Page, Layout, BlockStack, Card, Text, Button, Banner, Divider } from "@shopify/polaris";
+import { Page, Layout, BlockStack, Card, Text, Button, Divider } from "@shopify/polaris";
 import { authenticate } from "../shopify.server";
 import { db } from "../db.server";
-import { encrypt, decrypt } from "../services/crypto.server";
+import { encrypt } from "../services/crypto.server";
 import { getEbayAuthUrl } from "../services/ebay.server";
 import { CredentialsForm } from "../components/CredentialsForm";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
   const cred = await db.ebayCredential.findUnique({ where: { shop: session.shop } });
-  const hasCreds = !!cred;
+  const hasCreds = !!(cred?.sellerId);
   const hasOAuth = !!(cred?.refreshToken);
 
-  // Resolve RuName: prefer what's stored in DB, fall back to env var
-  const ruName = cred?.redirectUri ?? process.env.EBAY_RUNAME ?? null;
-  const appId = hasCreds ? decrypt(cred!.appId) : (process.env.EBAY_APP_ID ?? null);
-  const oAuthUrl = ruName && appId
+  // App-level credentials always come from env vars — user never needs to enter them
+  const appId = process.env.EBAY_APP_ID ?? null;
+  const ruName = process.env.EBAY_RUNAME ?? null;
+  const oAuthUrl = appId && ruName
     ? getEbayAuthUrl(appId, ruName, session.shop)
     : null;
 
-  return json({ hasCreds, hasOAuth, oAuthUrl, defaultRuName: process.env.EBAY_RUNAME ?? "" });
+  return json({ hasCreds, hasOAuth, oAuthUrl });
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
   const { session } = await authenticate.admin(request);
   const form = await request.formData();
+  const sellerId = (form.get("sellerId") as string)?.trim();
 
-  const appId = form.get("appId") as string;
-  const certId = form.get("certId") as string;
-  const devId = form.get("devId") as string;
-  const authToken = (form.get("authToken") as string) || "";
-  const sellerId = form.get("sellerId") as string;
-  // Fall back to env var so the user doesn't need to re-type the RuName
-  const redirectUri = (form.get("redirectUri") as string) || process.env.EBAY_RUNAME || "";
-
-  if (!appId || !certId || !devId || !sellerId) {
-    return json({ saved: false, error: "App ID, Cert ID, Dev ID, and Seller ID are required." });
+  if (!sellerId) {
+    return json({ saved: false, error: "eBay username is required." });
   }
 
-  if (!authToken && !redirectUri) {
-    return json({ saved: false, error: "Either a legacy Auth Token or an OAuth RuName is required." });
+  // App-level credentials come from env vars — encrypt and cache them in DB
+  // so the sync engine and token refresh don't need live env access.
+  const appId = process.env.EBAY_APP_ID ?? "";
+  const certId = process.env.EBAY_CERT_ID ?? "";
+  const devId = process.env.EBAY_DEV_ID ?? "";
+  const ruName = process.env.EBAY_RUNAME ?? "";
+
+  if (!appId || !certId || !devId) {
+    return json({ saved: false, error: "App is not configured yet. Please contact support." });
   }
 
   await db.ebayCredential.upsert({
@@ -50,17 +50,16 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       appId: encrypt(appId),
       certId: encrypt(certId),
       devId: encrypt(devId),
-      authToken: authToken ? encrypt(authToken) : "",
+      authToken: "",
       sellerId,
-      redirectUri: redirectUri || null,
+      redirectUri: ruName || null,
     },
     update: {
       appId: encrypt(appId),
       certId: encrypt(certId),
       devId: encrypt(devId),
-      authToken: authToken ? encrypt(authToken) : "",
       sellerId,
-      redirectUri: redirectUri || null,
+      redirectUri: ruName || null,
     },
   });
 
@@ -68,7 +67,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 };
 
 export default function SettingsPage() {
-  const { hasCreds, hasOAuth, oAuthUrl, defaultRuName } = useLoaderData<typeof loader>();
+  const { hasCreds, hasOAuth, oAuthUrl } = useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
 
   return (
@@ -76,34 +75,12 @@ export default function SettingsPage() {
       <Layout>
         <Layout.Section>
           <BlockStack gap="500">
-            {hasCreds && !actionData?.saved && (
-              <Banner tone="info" title="Credentials already configured. Re-enter to update them. Existing credentials will be overwritten with the new values you provide." />
-            )}
             <CredentialsForm
               saved={actionData?.saved ?? false}
               error={actionData?.error}
               hasOAuth={hasOAuth}
               oAuthUrl={oAuthUrl ?? undefined}
-              defaultRuName={defaultRuName}
             />
-
-            {oAuthUrl && !hasOAuth && (
-              <Card>
-                <BlockStack gap="400">
-                  <Text as="h2" variant="headingMd">Connect with eBay OAuth 2.0</Text>
-                  <Text as="p" variant="bodyMd" tone="subdued">
-                    After saving your credentials, click the button below to authorize the app with eBay
-                    using OAuth 2.0. This will redirect you to eBay's consent page where you grant the
-                    app permission to manage your inventory. OAuth access tokens are automatically refreshed
-                    and are the recommended authentication method.
-                  </Text>
-                  <Divider />
-                  <Button variant="primary" url={oAuthUrl} external>
-                    Authorize with eBay (OAuth 2.0)
-                  </Button>
-                </BlockStack>
-              </Card>
-            )}
 
             <Card>
               <BlockStack gap="400">
